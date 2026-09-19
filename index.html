@@ -97,6 +97,7 @@
       <button id="btnStart" class="btn btn-ghost" disabled>Start 15-second test</button>
       <button id="btnAbort" class="btn btn-ghost hidden">Stop test</button>
       <button id="btnCsv" class="btn btn-ghost" disabled>Download raw samples</button>
+      <button id="btnBaseline" class="btn btn-ghost" disabled>Reset baseline</button>
       <p id="hint" class="text-sm text-muted">Chrome or Edge, over HTTPS. The first run downloads a 7&nbsp;MB face model.</p>
     </div>
 
@@ -129,6 +130,14 @@
         <div class="metric">
           <dt>Velocity error (RMSE)<span>Root-mean-square gap between eye and target speed</span></dt>
           <dd id="mRmse" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Rested baseline<span>This driver's own reference, recorded on the first valid run</span></dt>
+          <dd id="mBase" class="readout">not set</dd>
+        </div>
+        <div class="metric">
+          <dt>Against baseline<span>Fail at 1.8×, borderline from 1.4×</span></dt>
+          <dd id="mRatio" class="readout">—</dd>
         </div>
         <div class="metric">
           <dt>Pursuit gain<span>Eye travel ÷ target travel. Healthy pursuit sits near 1.0</span></dt>

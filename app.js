@@ -38,16 +38,27 @@ const CONFIG = {
   CALIBRATION_S:    3,
   TEST_S:           12,
 
-  DERIV_WINDOW:     7,      // samples in the regression-slope window
-  EMA_ALPHA:        0.45,   // exponential smoothing on raw gaze (1 = no smoothing)
+  DERIV_WINDOW:     11,     // samples in the regression-slope window (~180 ms at 60 fps).
+                            // Raised from 7: the calibration gain k (typically 8–12) multiplies
+                            // landmark jitter as well as signal, and a 7-sample window left a
+                            // noise floor of roughly 0.4–0.5 amplitude/s — on top of the warn line.
+  EMA_ALPHA:        0.28,   // exponential smoothing on raw gaze (1 = no smoothing)
 
   EAR_BLINK:        0.21,   // eye-aspect-ratio below this = lid closed
   BLINK_BLANK_MS:   180,    // samples discarded after a blink, while the iris re-settles
 
-  // Fail / warn thresholds, expressed as a fraction of the peak target speed w.
-  // Provisional. Real deployment needs an empirical distribution from rested drivers.
-  FAIL_RATIO:       0.55,
-  WARN_RATIO:       0.35,
+  // --- within-subject scoring (primary) ---
+  // Smooth-pursuit quality varies hugely between healthy people: eye colour, glasses,
+  // camera, seating distance. Any fixed line is wrong for someone. So the first scored
+  // run becomes that person's rested baseline and later runs are judged against it.
+  BASELINE_KEY:     "blinkcheck.baseline.v1",
+  WARN_MULT:        1.4,    // RMSE ≥ 1.4 × baseline  → borderline
+  FAIL_MULT:        1.8,    // RMSE ≥ 1.8 × baseline  → fail
+
+  // --- absolute fallback, used only when no baseline is stored ---
+  // Fractions of the peak target speed w. Provisional; the baseline path is the real test.
+  FAIL_RATIO:       0.95,
+  WARN_RATIO:       0.70,
 
   SACCADE_ACC:      40,     // |eye acceleration| above this = corrective jump [amplitude/s²]
   SACCADE_REFRACT:  0.12,   // s, minimum gap between counted saccades
@@ -83,7 +94,9 @@ const el = {
   video: $("webcam"), overlay: $("overlay"), dot: $("dot"), stage: $("stage"),
   stageMsg: $("stageMsg"), stageTitle: $("stageTitle"), stageSub: $("stageSub"),
   phaseLabel: $("phaseLabel"), clock: $("clock"), progress: $("progress"),
-  btnCamera: $("btnCamera"), btnStart: $("btnStart"), btnAbort: $("btnAbort"), btnCsv: $("btnCsv"),
+  btnCamera: $("btnCamera"), btnStart: $("btnStart"), btnAbort: $("btnAbort"),
+  btnCsv: $("btnCsv"), btnBaseline: $("btnBaseline"),
+  mBase: $("mBase"), mRatio: $("mRatio"),
   hint: $("hint"), fps: $("fps"),
   verdict: $("verdict"), verdictText: $("verdictText"), verdictDetail: $("verdictDetail"),
   mRmse: $("mRmse"), mGain: $("mGain"), mLag: $("mLag"),
@@ -396,6 +409,37 @@ function closeCalibration() {
   }
 }
 
+/* -------------------------------------------------------------- baseline -- */
+/* Stored per browser profile in localStorage. One device per driver is the
+   assumption; a real fleet deployment would key this to a driver ID instead. */
+
+function loadBaseline() {
+  try {
+    const raw = localStorage.getItem(CONFIG.BASELINE_KEY);
+    if (!raw) return null;
+    const b = JSON.parse(raw);
+    return (b && isFinite(b.rmse) && b.rmse > 0) ? b : null;
+  } catch { return null; }
+}
+
+function saveBaseline(r) {
+  const b = { rmse: r.rmse, gain: r.gain, lagMs: r.lagMs, recorded: new Date().toISOString() };
+  try { localStorage.setItem(CONFIG.BASELINE_KEY, JSON.stringify(b)); } catch { /* private mode */ }
+  return b;
+}
+
+function clearBaseline() {
+  try { localStorage.removeItem(CONFIG.BASELINE_KEY); } catch { /* ignore */ }
+  showBaseline();
+  setVerdict("void", "Baseline cleared", "The next scored run becomes the new rested baseline. Record it while the driver is alert.");
+}
+
+function showBaseline() {
+  const b = loadBaseline();
+  el.mBase.innerHTML = b ? b.rmse.toFixed(3) + '<small> /s</small>' : "not set";
+  el.btnBaseline.disabled = !b;
+}
+
 /* --------------------------------------------------------------- scoring -- */
 
 function scoreRun() {
@@ -489,16 +533,38 @@ function finishTest() {
     return;
   }
 
-  const ratio = r.rmse / W;
-  if (r.rmse >= FAIL_RMSE) {
+  const baseline = loadBaseline();
+
+  // --- first valid run: record the rested baseline, do not judge it ---
+  if (!baseline) {
+    const b = saveBaseline(r);
+    showBaseline();
+    el.mRatio.textContent = "—";
+    // Absolute thresholds survive only as a sanity check on the baseline itself:
+    // a "rested" run this poor usually means bad tracking, not a bad driver.
+    const suspect = r.rmse >= FAIL_RMSE || r.gain < 0.6 || r.lagMs > 400;
+    setVerdict("void", "Baseline recorded",
+      `This run is now the reference for this device: RMSE ${b.rmse.toFixed(3)} /s, gain ${r.gain.toFixed(2)}, lag ${Math.round(r.lagMs)} ms. It only means anything if the driver was alert when it was taken.` +
+      (suspect
+        ? " These numbers look poor for a rested run — check lighting, glasses glare and head stillness, then reset the baseline and record it again."
+        : " Retest later and the result is judged against this number."));
+    setStage("Baseline recorded", "Run the test again to compare against it.");
+    return;
+  }
+
+  // --- later runs: judged against the person's own rested number ---
+  const ratio = r.rmse / baseline.rmse;
+  el.mRatio.innerHTML = ratio.toFixed(2) + '<small> ×</small>';
+
+  if (ratio >= CONFIG.FAIL_MULT) {
     setVerdict("fail", "Fail",
-      `Velocity error is ${(ratio * 100).toFixed(0)}% of peak target speed, above the ${(CONFIG.FAIL_RATIO * 100).toFixed(0)}% threshold. Pursuit is breaking down into corrective jumps — consistent with severe fatigue. Do not drive; get a proper assessment.`);
-  } else if (r.rmse >= WARN_RMSE) {
+      `Velocity error is ${ratio.toFixed(2)}× this driver's rested baseline, past the ${CONFIG.FAIL_MULT}× line. Pursuit is breaking into corrective jumps. Do not drive; get a proper assessment.`);
+  } else if (ratio >= CONFIG.WARN_MULT) {
     setVerdict("watch", "Borderline",
-      `Velocity error is ${(ratio * 100).toFixed(0)}% of peak target speed, between the warn and fail lines. Rest, then retest before a long shift.`);
+      `Velocity error is ${ratio.toFixed(2)}× baseline, between the ${CONFIG.WARN_MULT}× and ${CONFIG.FAIL_MULT}× lines. Rest and retest before a long shift.`);
   } else {
     setVerdict("pass", "Pass",
-      `Velocity error is ${(ratio * 100).toFixed(0)}% of peak target speed, gain ${r.gain.toFixed(2)}, lag ${Math.round(r.lagMs)} ms. Pursuit looks smooth.`);
+      `Velocity error is ${ratio.toFixed(2)}× baseline, gain ${r.gain.toFixed(2)}, lag ${Math.round(r.lagMs)} ms. Pursuit is holding up.`);
   }
   setStage("Scored", "Results are on the right. Press start to run it again.");
 }
@@ -528,6 +594,7 @@ function setMetrics(r) {
   if (!r) {
     el.mRmse.textContent = dash; el.mGain.textContent = dash; el.mLag.textContent = dash;
     el.mSacc.textContent = dash; el.mBlink.textContent = dash; el.mValid.textContent = dash;
+    el.mRatio.textContent = dash;
     return;
   }
   el.mBlink.textContent = String(state.blinks);
@@ -535,6 +602,7 @@ function setMetrics(r) {
   if (r.void) {
     el.mRmse.textContent = dash; el.mGain.textContent = dash;
     el.mLag.textContent = dash;  el.mSacc.textContent = dash;
+    el.mRatio.textContent = dash;
     return;
   }
   el.mRmse.innerHTML = r.rmse.toFixed(3) + '<small> /s</small>';
@@ -628,6 +696,9 @@ el.btnStart.addEventListener("click", () => {
 });
 el.btnAbort.addEventListener("click", () => abortTest());
 el.btnCsv.addEventListener("click", downloadCsv);
+el.btnBaseline.addEventListener("click", clearBaseline);
+
+showBaseline();
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && (state.phase === PHASE.CALIBRATING || state.phase === PHASE.TESTING)) {
