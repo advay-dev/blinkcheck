@@ -1,0 +1,134 @@
+/* BlinkCheck — custom CSS for the things Tailwind utilities can't express:
+   camera mirroring, the stimulus dot, tabular instrument readouts. */
+
+:root {
+  --hull:   #0B131B;
+  --panel:  #111E29;
+  --rail:   #1C2E3D;
+  --amber:  #FFB020;
+  --signal: #FF3B30;
+  --trace:  #38E1C9;
+  --ink:    #E7EEF4;
+  --muted:  #7E97A9;
+}
+
+body { font-synthesis-weight: none; }
+
+/* ---------- stage ---------- */
+/* 4:3 keeps the whole face in frame on most laptop cameras. */
+.stage { aspect-ratio: 4 / 3; }
+@media (min-width: 1024px) { .stage { aspect-ratio: 16 / 10; } }
+
+/* The webcam image is flipped so the feed behaves like a mirror.
+   The overlay canvas is flipped with it, so landmarks can be drawn
+   in raw camera coordinates without any per-point arithmetic.
+   app.js compensates for the camera's own left/right inversion
+   separately, via CAMERA_X_FLIP. */
+.mirrored { transform: scaleX(-1); }
+
+/* ---------- stimulus ---------- */
+.dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  border-radius: 50%;
+  background: var(--signal);
+  box-shadow: 0 0 0 3px rgba(255, 59, 48, 0.25), 0 0 26px 6px rgba(255, 59, 48, 0.45);
+  transform: translate(-50%, -50%);
+  will-change: left;
+}
+.dot::after {
+  content: "";
+  position: absolute;
+  inset: 9px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0.9;
+}
+
+/* ---------- readouts ---------- */
+.readout {
+  font-family: "Barlow Condensed", Barlow, sans-serif;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+
+.metric {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding: 0.85rem 1.25rem;
+}
+.metric dt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+.metric dt span {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--muted);
+  max-width: 22ch;
+}
+.metric dd {
+  font-size: 1.6rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+.metric dd small { font-size: 0.8rem; color: var(--muted); margin-left: 2px; }
+
+/* verdict colouring, set from app.js */
+.verdict-pass  #verdictText { color: var(--trace); }
+.verdict-watch #verdictText { color: var(--amber); }
+.verdict-fail  #verdictText { color: var(--signal); }
+.verdict-void  #verdictText { color: var(--muted); }
+
+/* ---------- buttons ---------- */
+.btn {
+  border-radius: 8px;
+  padding: 0.6rem 1.1rem;
+  font-family: "Barlow Condensed", Barlow, sans-serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.btn-primary { background: var(--amber); color: #15202B; }
+.btn-primary:hover:not(:disabled) { background: #FFC24D; }
+.btn-ghost { border-color: var(--rail); color: var(--ink); background: transparent; }
+.btn-ghost:hover:not(:disabled) { border-color: #2E4B62; background: rgba(255,255,255,0.04); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:focus-visible,
+button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+/* ---------- misc ---------- */
+.lamp { width: 8px; height: 8px; border-radius: 50%; background: var(--rail); display: inline-block; }
+.lamp-on { background: var(--trace); box-shadow: 0 0 8px var(--trace); }
+
+.step { display: flex; gap: 0.75rem; }
+.step-n {
+  flex: none;
+  width: 1.4rem; height: 1.4rem;
+  display: grid; place-items: center;
+  border: 1px solid var(--rail);
+  border-radius: 50%;
+  font-family: "Barlow Condensed", Barlow, sans-serif;
+  font-size: 0.85rem;
+  color: var(--amber);
+}
+
+.chart-wrap { position: relative; height: 240px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0.01ms !important; }
+  /* The stimulus must still move — it is the measurement — but nothing else animates. */
+}

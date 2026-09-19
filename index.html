@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BlinkCheck — smooth-pursuit fitness screen</title>
+<meta name="description" content="Browser-based smooth-pursuit eye tracking for driver fatigue screening. Runs entirely on-device." />
+
+<!-- Typography: Barlow / Barlow Condensed (transport-signage grotesk) -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<!-- Tailwind (play CDN — no build step, GitHub Pages safe) -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          hull:   '#0B131B',   // deep petrol ground
+          panel:  '#111E29',   // instrument panel
+          rail:   '#1C2E3D',   // hairline rules / borders
+          amber:  '#FFB020',   // dashboard signal
+          signal: '#FF3B30',   // stimulus red
+          trace:  '#38E1C9',   // eye trace
+          ink:    '#E7EEF4',
+          muted:  '#7E97A9'
+        },
+        fontFamily: {
+          sans: ['Barlow', 'system-ui', 'sans-serif'],
+          cond: ['"Barlow Condensed"', 'Barlow', 'sans-serif']
+        }
+      }
+    }
+  };
+</script>
+<link rel="stylesheet" href="style.css" />
+</head>
+
+<body class="min-h-screen bg-hull text-ink font-sans antialiased">
+
+<header class="border-b border-rail">
+  <div class="mx-auto max-w-[1400px] px-5 py-4 flex flex-wrap items-center gap-x-6 gap-y-2">
+    <div class="flex items-baseline gap-3">
+      <span class="font-cond text-3xl tracking-tight" style="font-weight:700">BlinkCheck</span>
+      <span class="text-muted text-sm">Smooth-pursuit fitness screen</span>
+    </div>
+    <div class="ml-auto flex items-center gap-5 text-sm">
+      <span class="flex items-center gap-2">
+        <span id="privacyLamp" class="lamp lamp-on"></span>
+        <span class="text-muted">Video never leaves this device</span>
+      </span>
+      <span class="hidden sm:flex items-center gap-2">
+        <span class="text-muted">Frame rate</span>
+        <span id="fps" class="readout text-base">—</span>
+      </span>
+    </div>
+  </div>
+</header>
+
+<main class="mx-auto max-w-[1400px] px-5 py-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
+
+  <!-- ============ STAGE ============ -->
+  <section>
+    <div id="stage" class="stage relative w-full overflow-hidden rounded-xl bg-black border border-rail">
+      <video id="webcam" class="mirrored absolute inset-0 h-full w-full object-cover" autoplay playsinline muted></video>
+      <canvas id="overlay" class="mirrored absolute inset-0 h-full w-full"></canvas>
+
+      <!-- horizon line the stimulus travels along -->
+      <div id="track" class="pointer-events-none absolute left-0 right-0 top-1/2 h-px bg-white/10"></div>
+
+      <!-- the stimulus -->
+      <div id="dot" class="dot hidden"></div>
+
+      <!-- phase banner -->
+      <div id="stageMsg" class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/55 px-6 text-center">
+        <p id="stageTitle" class="font-cond text-4xl leading-none" style="font-weight:600">Camera is off</p>
+        <p id="stageSub" class="max-w-md text-sm text-muted">Turn on the camera to begin. Sit about an arm's length away, keep your head still, and follow the red dot with your eyes only.</p>
+      </div>
+
+      <!-- countdown + progress -->
+      <div class="absolute left-0 right-0 bottom-0">
+        <div class="flex items-center justify-between px-4 pb-2 text-xs text-muted">
+          <span id="phaseLabel">Standby</span>
+          <span id="clock" class="readout">0.0 s</span>
+        </div>
+        <div class="h-1 w-full bg-white/10">
+          <div id="progress" class="h-full w-0 bg-amber transition-[width] duration-100 ease-linear"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- controls -->
+    <div class="mt-4 flex flex-wrap items-center gap-3">
+      <button id="btnCamera" class="btn btn-primary">Turn on camera</button>
+      <button id="btnStart" class="btn btn-ghost" disabled>Start 15-second test</button>
+      <button id="btnAbort" class="btn btn-ghost hidden">Stop test</button>
+      <button id="btnCsv" class="btn btn-ghost" disabled>Download raw samples</button>
+      <p id="hint" class="text-sm text-muted">Chrome or Edge, over HTTPS. The first run downloads a 7&nbsp;MB face model.</p>
+    </div>
+
+    <!-- live chart -->
+    <div class="mt-6 rounded-xl border border-rail bg-panel p-4">
+      <div class="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 class="font-cond text-xl" style="font-weight:600">Eye velocity against target velocity</h2>
+        <p class="text-xs text-muted">Normalised amplitude per second</p>
+      </div>
+      <div class="chart-wrap mt-3">
+        <canvas id="velChart"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ INSTRUMENTS ============ -->
+  <aside class="flex flex-col gap-5">
+
+    <div id="verdict" class="rounded-xl border border-rail bg-panel p-5">
+      <p class="text-xs text-muted">Result</p>
+      <p id="verdictText" class="font-cond text-5xl leading-none mt-1" style="font-weight:700">No test yet</p>
+      <p id="verdictDetail" class="mt-2 text-sm text-muted">Run the test to get a reading.</p>
+    </div>
+
+    <div class="rounded-xl border border-rail bg-panel">
+      <div class="border-b border-rail px-5 py-3">
+        <h2 class="font-cond text-xl" style="font-weight:600">Measurements</h2>
+      </div>
+      <dl class="divide-y divide-rail">
+        <div class="metric">
+          <dt>Velocity error (RMSE)<span>Root-mean-square gap between eye and target speed</span></dt>
+          <dd id="mRmse" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Pursuit gain<span>Eye travel ÷ target travel. Healthy pursuit sits near 1.0</span></dt>
+          <dd id="mGain" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Tracking lag<span>Best-fit delay between target and eye</span></dt>
+          <dd id="mLag" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Catch-up saccades<span>Corrective jumps per second — the stutter in nystagmus</span></dt>
+          <dd id="mSacc" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Blinks<span>Blinks are excluded from scoring</span></dt>
+          <dd id="mBlink" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Usable samples<span>Below 70% the test is void</span></dt>
+          <dd id="mValid" class="readout">—</dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="rounded-xl border border-rail bg-panel p-5">
+      <h2 class="font-cond text-xl" style="font-weight:600">How the test runs</h2>
+      <ol class="mt-3 space-y-3 text-sm text-muted">
+        <li class="step"><span class="step-n">1</span><span><b class="text-ink">Calibrate, 3 s.</b> The dot starts moving and the app learns how far your irises travel for a given dot position. Nothing is scored yet.</span></li>
+        <li class="step"><span class="step-n">2</span><span><b class="text-ink">Track, 12 s.</b> Eye velocity is differentiated frame by frame and compared with the analytic velocity of the dot.</span></li>
+        <li class="step"><span class="step-n">3</span><span><b class="text-ink">Score.</b> Error is summarised as RMSE, gain, lag and saccade rate.</span></li>
+      </ol>
+      <p class="mt-4 border-t border-rail pt-3 text-xs text-muted">
+        Stimulus: simple harmonic motion, <span id="cfgFreq" class="readout text-xs"></span>&nbsp;Hz, peak target speed <span id="cfgPeak" class="readout text-xs"></span>&nbsp;s<sup>-1</sup>.
+      </p>
+    </div>
+
+    <p class="text-xs leading-relaxed text-muted">
+      BlinkCheck is a hackathon prototype, not a medical device. It does not diagnose concussion, intoxication or any
+      condition, and its thresholds are provisional defaults that have not been validated against a clinical reference.
+      Do not use it to clear or ground a driver.
+    </p>
+  </aside>
+</main>
+
+<!-- Chart.js (UMD global) -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<!-- App (ES module: imports MediaPipe Tasks Vision straight from the CDN) -->
+<script type="module" src="app.js"></script>
+</body>
+</html>
