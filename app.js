@@ -153,7 +153,7 @@ const el = {
   rRoundLabel: $("reactionRoundLabel"), rClock: $("reactionClock"), rProgress: $("reactionProgress"),
   btnReactionStart: $("btnReactionStart"), btnReactionAbort: $("btnReactionAbort"),
   rVerdict: $("reactionVerdict"), rVerdictText: $("reactionVerdictText"), rVerdictDetail: $("reactionVerdictDetail"),
-  rMean: $("rMean"), rWorst: $("rWorst"), rMiss: $("rMiss"), rFalse: $("rFalse")
+  rMedian: $("rMedian"), rWorst: $("rWorst"), rMiss: $("rMiss"), rFalse: $("rFalse")
 };
 const ctx2d = el.overlay.getContext("2d");
 
@@ -825,8 +825,8 @@ const REACTION_CONFIG = {
   TARGET_MS:        2000,    // a target left untapped this long counts as a miss
   MARGIN_PCT:       [12, 88, 15, 85], // [minX, maxX, minY, maxY] safe spawn area, %
 
-  WARN_MEAN_MS:     450,     // mean reaction time at/above this -> borderline
-  FAIL_MEAN_MS:     600,     // mean reaction time at/above this -> fail
+  WARN_MEDIAN_MS:   450,     // median reaction time at/above this -> borderline
+  FAIL_MEDIAN_MS:   600,     // median reaction time at/above this -> fail
   MAX_MISSES:       1,       // more misses than this fails outright; a miss is a lapse
   MAX_FALSE_STARTS: 2        // more taps-on-nothing than this fails outright
 };
@@ -935,15 +935,15 @@ function finishReaction() {
     return;
   }
 
-  if (r.misses > REACTION_CONFIG.MAX_MISSES || r.falseStarts > REACTION_CONFIG.MAX_FALSE_STARTS || r.meanMs >= REACTION_CONFIG.FAIL_MEAN_MS) {
+  if (r.misses > REACTION_CONFIG.MAX_MISSES || r.falseStarts > REACTION_CONFIG.MAX_FALSE_STARTS || r.medianMs >= REACTION_CONFIG.FAIL_MEDIAN_MS) {
     setReactionVerdict("fail", "Fail",
-      `Mean reaction time ${Math.round(r.meanMs)} ms, ${r.misses} miss(es), ${r.falseStarts} false start(s). Reaction speed and attention look degraded.`);
-  } else if (r.misses >= REACTION_CONFIG.MAX_MISSES || r.meanMs >= REACTION_CONFIG.WARN_MEAN_MS) {
+      `Median reaction time ${Math.round(r.medianMs)} ms, ${r.misses} miss(es), ${r.falseStarts} false start(s). Reaction speed and attention look degraded.`);
+  } else if (r.misses >= REACTION_CONFIG.MAX_MISSES || r.medianMs >= REACTION_CONFIG.WARN_MEDIAN_MS) {
     setReactionVerdict("watch", "Borderline",
-      `Mean reaction time ${Math.round(r.meanMs)} ms. Getting slower — rest before a long shift.`);
+      `Median reaction time ${Math.round(r.medianMs)} ms. Getting slower — rest before a long shift.`);
   } else {
     setReactionVerdict("pass", "Pass",
-      `Mean reaction time ${Math.round(r.meanMs)} ms, slowest ${Math.round(r.worstMs)} ms. Reflexes look sharp.`);
+      `Median reaction time ${Math.round(r.medianMs)} ms, slowest ${Math.round(r.worstMs)} ms. Reflexes look sharp.`);
   }
   setReactionStage("Scored", "Results are on the right. Press start to run it again.");
 }
@@ -952,11 +952,16 @@ function scoreReaction() {
   const hits = reaction.results.filter((x) => x.rt !== null);
   const misses = reaction.results.length - hits.length;
   if (hits.length === 0) {
-    return { void: true, meanMs: NaN, worstMs: NaN, misses, falseStarts: reaction.falseStarts };
+    return { void: true, medianMs: NaN, worstMs: NaN, misses, falseStarts: reaction.falseStarts };
   }
-  const meanMs = hits.reduce((s, x) => s + x.rt, 0) / hits.length;
-  const worstMs = Math.max(...hits.map((x) => x.rt));
-  return { void: false, meanMs, worstMs, misses, falseStarts: reaction.falseStarts };
+  // Median, not mean: RT distributions are right-skewed by nature (occasional slow
+  // lapses drag a mean up a lot more than they should), and lapses are already
+  // tracked separately via misses — the median is a better read on typical speed.
+  const sorted = hits.map((x) => x.rt).sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const medianMs = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  const worstMs = sorted[sorted.length - 1];
+  return { void: false, medianMs, worstMs, misses, falseStarts: reaction.falseStarts };
 }
 
 function setReactionStage(title, sub) {
@@ -975,17 +980,17 @@ function setReactionVerdict(kind, text, detail) {
 function setReactionMetrics(r) {
   const dash = "—";
   if (!r) {
-    el.rMean.textContent = dash; el.rWorst.textContent = dash;
+    el.rMedian.textContent = dash; el.rWorst.textContent = dash;
     el.rMiss.textContent = dash; el.rFalse.textContent = dash;
     return;
   }
   el.rMiss.textContent = String(r.misses);
   el.rFalse.textContent = String(r.falseStarts);
   if (r.void) {
-    el.rMean.textContent = dash; el.rWorst.textContent = dash;
+    el.rMedian.textContent = dash; el.rWorst.textContent = dash;
     return;
   }
-  el.rMean.innerHTML = Math.round(r.meanMs) + '<small> ms</small>';
+  el.rMedian.innerHTML = Math.round(r.medianMs) + '<small> ms</small>';
   el.rWorst.innerHTML = Math.round(r.worstMs) + '<small> ms</small>';
 }
 
