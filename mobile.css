@@ -1,0 +1,44 @@
+/* BlinkCheck — mobile overrides, layered on top of style.css.
+   Only things that are genuinely phone-specific live here: touch target
+   size, tap responsiveness, and safe-area insets for notch/home-indicator
+   devices. Everything else (colours, verdict states, metric layout) is
+   shared with the desktop page on purpose. */
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  /* Disable the default double-tap-to-zoom delay on buttons and the
+     reaction target — a real ~300ms delay is a large fraction of a
+     reaction-time measurement. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* Buttons are the primary hit targets on a phone: taller than the desktop
+   44px minimum for a comfortable thumb reach, and full-width by default
+   (set via w-full in the markup) rather than wrapped inline. */
+.btn {
+  min-height: 48px;
+  font-size: 1.1rem;
+}
+
+/* The reaction target is the whole point of that test — make it bigger
+   than the desktop 44px so a finger (which occludes its own target) can
+   land on it reliably, without shrinking the spawn area it moves within. */
+.target {
+  width: 64px;
+  height: 64px;
+}
+.target::after {
+  inset: 16px;
+}
+
+/* `.stage` keeps its 4:3 aspect ratio from style.css, which already suits
+   a phone held upright — no override needed here. `.metric dd`'s 1.6rem
+   base size is also kept as-is; it already reads fine at full mobile width. */

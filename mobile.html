@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<title>BlinkCheck — phone</title>
+<meta name="description" content="Browser-based smooth-pursuit eye tracking and reaction-time screening for driver fatigue. Phone-optimised layout. Runs entirely on-device." />
+
+<!-- Typography: Barlow / Barlow Condensed (transport-signage grotesk) -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<!-- Tailwind (play CDN — no build step, GitHub Pages safe) -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          hull:   '#0B131B',   // deep petrol ground
+          panel:  '#111E29',   // instrument panel
+          rail:   '#1C2E3D',   // hairline rules / borders
+          amber:  '#FFB020',   // dashboard signal
+          signal: '#FF3B30',   // stimulus red
+          trace:  '#38E1C9',   // eye trace
+          ink:    '#E7EEF4',
+          muted:  '#7E97A9'
+        },
+        fontFamily: {
+          sans: ['Barlow', 'system-ui', 'sans-serif'],
+          cond: ['"Barlow Condensed"', 'Barlow', 'sans-serif']
+        }
+      }
+    }
+  };
+</script>
+<!-- Same base styles as the desktop page (shared with app.js, which is unmodified —
+     this file only changes markup/layout, plus mobile.css for touch-specific tuning). -->
+<link rel="stylesheet" href="style.css" />
+<link rel="stylesheet" href="mobile.css" />
+</head>
+
+<body class="min-h-screen bg-hull text-ink font-sans antialiased">
+
+<header class="border-b border-rail safe-top">
+  <div class="px-4 py-3 flex flex-col gap-1">
+    <div class="flex items-baseline gap-2">
+      <span class="font-cond text-2xl tracking-tight" style="font-weight:700">BlinkCheck</span>
+      <span class="text-muted text-xs">Phone screen</span>
+    </div>
+    <div class="flex items-center gap-4 text-xs">
+      <span class="flex items-center gap-2">
+        <span id="privacyLamp" class="lamp lamp-on"></span>
+        <span class="text-muted">Video never leaves this device</span>
+      </span>
+      <span class="flex items-center gap-2 ml-auto">
+        <span class="text-muted">FPS</span>
+        <span id="fps" class="readout text-sm">—</span>
+      </span>
+    </div>
+  </div>
+</header>
+
+<main class="px-4 py-4 flex flex-col gap-4 max-w-[560px] mx-auto">
+
+  <!-- ============ PURSUIT TEST ============ -->
+  <section class="flex flex-col gap-4">
+    <div id="stage" class="stage relative w-full overflow-hidden rounded-xl bg-black border border-rail">
+      <video id="webcam" class="mirrored absolute inset-0 h-full w-full object-cover" autoplay playsinline muted></video>
+      <canvas id="overlay" class="mirrored absolute inset-0 h-full w-full"></canvas>
+
+      <!-- horizon line the stimulus travels along -->
+      <div id="track" class="pointer-events-none absolute left-0 right-0 top-1/2 h-px bg-white/10"></div>
+
+      <!-- the stimulus -->
+      <div id="dot" class="dot hidden"></div>
+
+      <!-- phase banner -->
+      <div id="stageMsg" class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/55 px-5 text-center">
+        <p id="stageTitle" class="font-cond text-3xl leading-none" style="font-weight:600">Camera is off</p>
+        <p id="stageSub" class="max-w-xs text-sm text-muted">Prop your phone up at arm's length, roughly eye level. Turn on the camera, keep your head still, and follow the red dot with your eyes only.</p>
+      </div>
+
+      <!-- countdown + progress -->
+      <div class="absolute left-0 right-0 bottom-0">
+        <div class="flex items-center justify-between px-3 pb-2 text-xs text-muted">
+          <span id="phaseLabel">Standby</span>
+          <span id="clock" class="readout">0.0 s</span>
+        </div>
+        <div class="h-1 w-full bg-white/10">
+          <div id="progress" class="h-full w-0 bg-amber transition-[width] duration-100 ease-linear"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- controls: stacked, full-width, thumb-friendly -->
+    <div class="flex flex-col gap-2">
+      <button id="btnCamera" class="btn btn-primary w-full">Turn on camera</button>
+      <button id="btnStart" class="btn btn-ghost w-full" disabled>Start 15-second test</button>
+      <button id="btnAbort" class="btn btn-ghost w-full hidden">Stop test</button>
+      <div class="grid grid-cols-2 gap-2">
+        <button id="btnCsv" class="btn btn-ghost" disabled>Raw samples</button>
+        <button id="btnBaseline" class="btn btn-ghost" disabled>Reset baseline</button>
+      </div>
+      <p id="hint" class="text-xs text-muted">Chrome or Safari, over HTTPS (or localhost). The first run downloads a 7&nbsp;MB face model.</p>
+    </div>
+
+    <div id="verdict" class="rounded-xl border border-rail bg-panel p-4">
+      <p class="text-xs text-muted">Result</p>
+      <p id="verdictText" class="font-cond text-4xl leading-none mt-1" style="font-weight:700">No test yet</p>
+      <p id="verdictDetail" class="mt-2 text-sm text-muted">Run the test to get a reading.</p>
+    </div>
+
+    <div class="rounded-xl border border-rail bg-panel">
+      <div class="border-b border-rail px-4 py-3">
+        <h2 class="font-cond text-lg" style="font-weight:600">Measurements</h2>
+      </div>
+      <dl class="divide-y divide-rail">
+        <div class="metric">
+          <dt>Velocity error (RMSE)<span>Root-mean-square gap between eye and target speed</span></dt>
+          <dd id="mRmse" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Rested baseline<span>Your own reference, recorded on the first valid run</span></dt>
+          <dd id="mBase" class="readout">not set</dd>
+        </div>
+        <div class="metric">
+          <dt>Against baseline<span>Fail at 1.3×, borderline from 1.2×</span></dt>
+          <dd id="mRatio" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Pursuit gain<span>Eye travel ÷ target travel. Healthy pursuit sits near 1.0</span></dt>
+          <dd id="mGain" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Tracking lag<span>Best-fit delay between target and eye</span></dt>
+          <dd id="mLag" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Catch-up saccades<span>Corrective jumps per second</span></dt>
+          <dd id="mSacc" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Blinks<span>Excluded from scoring</span></dt>
+          <dd id="mBlink" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Usable samples<span>Below 70% the test is void</span></dt>
+          <dd id="mValid" class="readout">—</dd>
+        </div>
+      </dl>
+    </div>
+
+    <details class="rounded-xl border border-rail bg-panel p-4">
+      <summary class="font-cond text-lg cursor-pointer" style="font-weight:600">How the test runs</summary>
+      <ol class="mt-3 space-y-3 text-sm text-muted">
+        <li class="step"><span class="step-n">1</span><span><b class="text-ink">Calibrate, 3 s.</b> The dot starts moving and the app learns how far your irises travel for a given dot position. Nothing is scored yet.</span></li>
+        <li class="step"><span class="step-n">2</span><span><b class="text-ink">Track, 12 s.</b> Eye velocity is differentiated frame by frame and compared with the analytic velocity of the dot.</span></li>
+        <li class="step"><span class="step-n">3</span><span><b class="text-ink">Score.</b> Error is summarised as RMSE, gain, lag and saccade rate.</span></li>
+      </ol>
+      <p class="mt-4 border-t border-rail pt-3 text-xs text-muted">
+        Stimulus: simple harmonic motion, <span id="cfgFreq" class="readout text-xs"></span>&nbsp;Hz, peak target speed <span id="cfgPeak" class="readout text-xs"></span>&nbsp;s<sup>-1</sup>.
+      </p>
+    </details>
+
+    <div class="rounded-xl border border-rail bg-panel p-4">
+      <div class="flex items-baseline justify-between gap-2">
+        <h2 class="font-cond text-lg" style="font-weight:600">Eye vs. target velocity</h2>
+      </div>
+      <div class="chart-wrap mt-3">
+        <canvas id="velChart"></canvas>
+      </div>
+    </div>
+
+    <p class="text-xs leading-relaxed text-muted">
+      BlinkCheck is a hackathon prototype, not a medical device. It does not diagnose concussion, intoxication or any
+      condition, and its thresholds are provisional defaults that have not been validated against a clinical reference.
+      Do not use it to clear or ground a driver.
+    </p>
+  </section>
+
+  <!-- ============ REACTION TEST ============ -->
+  <section class="flex flex-col gap-4 pt-2 border-t border-rail">
+    <div class="pt-4">
+      <h2 class="font-cond text-2xl tracking-tight" style="font-weight:700">Reaction test</h2>
+      <span class="text-muted text-sm">Tap the target the instant it appears</span>
+    </div>
+
+    <div id="reactionStage" class="stage relative w-full overflow-hidden rounded-xl bg-black border border-rail">
+      <!-- the target -->
+      <div id="reactionTarget" class="target hidden"></div>
+
+      <!-- phase banner -->
+      <div id="reactionMsg" class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/55 px-5 text-center">
+        <p id="reactionTitle" class="font-cond text-3xl leading-none" style="font-weight:600">Reaction test</p>
+        <p id="reactionSub" class="max-w-xs text-sm text-muted">Ten targets, one at a time, at random spots and random timing. Tap each the instant it appears — tapping empty space counts against you.</p>
+      </div>
+
+      <!-- round + progress -->
+      <div class="absolute left-0 right-0 bottom-0">
+        <div class="flex items-center justify-between px-3 pb-2 text-xs text-muted">
+          <span id="reactionRoundLabel">Standby</span>
+          <span id="reactionClock" class="readout">0 / 10</span>
+        </div>
+        <div class="h-1 w-full bg-white/10">
+          <div id="reactionProgress" class="h-full w-0 bg-amber transition-[width] duration-100 ease-linear"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex flex-col gap-2">
+      <button id="btnReactionStart" class="btn btn-primary w-full">Start reaction test</button>
+      <button id="btnReactionAbort" class="btn btn-ghost w-full hidden">Stop test</button>
+      <p class="text-xs text-muted">Tap with your finger — no mouse needed.</p>
+    </div>
+
+    <div id="reactionVerdict" class="rounded-xl border border-rail bg-panel p-4">
+      <p class="text-xs text-muted">Result</p>
+      <p id="reactionVerdictText" class="font-cond text-4xl leading-none mt-1" style="font-weight:700">No test yet</p>
+      <p id="reactionVerdictDetail" class="mt-2 text-sm text-muted">Run the test to get a reading.</p>
+    </div>
+
+    <div class="rounded-xl border border-rail bg-panel">
+      <div class="border-b border-rail px-4 py-3">
+        <h2 class="font-cond text-lg" style="font-weight:600">Measurements</h2>
+      </div>
+      <dl class="divide-y divide-rail">
+        <div class="metric">
+          <dt>Mean reaction time<span>Fail at 600&nbsp;ms, borderline from 450&nbsp;ms</span></dt>
+          <dd id="rMean" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Slowest hit<span>Worst single reaction — a lapse indicator</span></dt>
+          <dd id="rWorst" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Misses<span>Timed out untapped. More than 1 fails</span></dt>
+          <dd id="rMiss" class="readout">—</dd>
+        </div>
+        <div class="metric">
+          <dt>False starts<span>Taps on empty space</span></dt>
+          <dd id="rFalse" class="readout">—</dd>
+        </div>
+      </dl>
+    </div>
+
+    <p class="text-xs leading-relaxed text-muted pb-4">
+      Provisional thresholds, same caveat as the pursuit test: not validated against a rested/fatigued
+      reference group for this exact task, and point-and-tap reaction time varies with screen size and
+      hand position. Treat the verdict as a rough signal, not a diagnosis.
+    </p>
+  </section>
+
+</main>
+
+<!-- Chart.js (UMD global) -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<!-- App (ES module: imports MediaPipe Tasks Vision straight from the CDN). Unmodified —
+     same element ids as the desktop page, so the same script drives both. -->
+<script type="module" src="app.js"></script>
+</body>
+</html>

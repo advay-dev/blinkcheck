@@ -1,12 +1,18 @@
 # BlinkCheck
 
-Browser-based smooth-pursuit screen for driver fatigue. Three static files, no build step, no server.
+Browser-based smooth-pursuit and reaction-time screen for driver fatigue. Static files, no
+build step, no server-side code.
+
+- `index.html` — desktop layout (two-column: stage + instruments side by side).
+- `mobile.html` — phone layout (single column, larger touch targets). Same `app.js` and
+  `style.css`, plus `mobile.css` for the touch-specific overrides — the two pages share every
+  element id, so the one script drives both.
 
 ## Deploy to GitHub Pages
 
 ```bash
 git init
-git add index.html style.css app.js README.md
+git add index.html mobile.html style.css mobile.css app.js README.md
 git commit -m "BlinkCheck prototype"
 git branch -M main
 git remote add origin https://github.com/<you>/blinkcheck.git
@@ -14,10 +20,17 @@ git push -u origin main
 ```
 
 Then **Settings → Pages → Source: Deploy from a branch → main / (root)**. Live at
-`https://<you>.github.io/blinkcheck/`. HTTPS is mandatory — `getUserMedia` refuses to run on
-plain HTTP. For local work use `python3 -m http.server` and open `http://localhost:8000`
-(localhost counts as a secure context; opening `index.html` as a `file://` URL will not work,
-because ES modules and the camera both need an origin).
+`https://<you>.github.io/blinkcheck/` (desktop) and `https://<you>.github.io/blinkcheck/mobile.html`
+(phone). HTTPS is mandatory — `getUserMedia` refuses to run on plain HTTP. For local work use
+`python3 -m http.server` and open `http://localhost:8000` (localhost counts as a secure context;
+opening `index.html` as a `file://` URL will not work, because ES modules and the camera both
+need an origin).
+
+**Testing on an actual phone against a local server**: `http://<your-laptop-IP>:8000` on your
+phone is *not* a secure context — only `localhost` itself is exempt from the HTTPS requirement,
+so the camera-based pursuit test won't get a permission prompt that way. The reaction test has
+no such restriction and works fine over plain HTTP on the LAN. To test the camera on your phone
+before deploying, either serve over HTTPS locally or use a tunnel (e.g. `ngrok http 8000`).
 
 ## What it measures
 
