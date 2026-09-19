@@ -254,6 +254,10 @@
 
 </main>
 
+<!-- Marks this page as mobile for app.js's phone-only sensor recalibration (wider pursuit-
+     test lag compensation). A plain script, so it runs before the deferred module below —
+     index.html never sets this, so desktop behaviour is untouched. -->
+<script>window.BLINKCHECK_MOBILE = true;</script>
 <!-- Chart.js (UMD global) -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <!-- App (ES module: imports MediaPipe Tasks Vision straight from the CDN). Unmodified —

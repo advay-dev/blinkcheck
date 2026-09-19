@@ -98,6 +98,24 @@ const CONFIG = {
   CHART_POINTS:     220
 };
 
+// Phone-only recalibration. mobile.html sets window.BLINKCHECK_MOBILE = true in a plain
+// script before this one loads; index.html never sets it, so IS_MOBILE is false there and
+// none of this runs — desktop behaviour is unchanged, on purpose.
+//
+// On-device face-landmark inference is real work, and phone GPUs (often weaker, sometimes
+// thermally throttled) can take meaningfully longer per frame than a laptop's, adding system
+// latency on top of ordinary human reaction time. The lag-compensation search below was tuned
+// against laptop timing (see MAX_LAG_MS's own comment): if a phone's true combined lag exceeds
+// that search window, genuinely correct tracking can't be aligned, reads as uncorrelated, and
+// fails the MIN_CORR gate even though the driver is actually tracking the dot. Widen the search
+// and give a little more correlation margin to compensate — these are provisional numbers
+// (no real phone-hardware measurements behind them yet), same caveat as everything else here.
+const IS_MOBILE = typeof window !== "undefined" && window.BLINKCHECK_MOBILE === true;
+if (IS_MOBILE) {
+  CONFIG.MAX_LAG_MS = 600;
+  CONFIG.MIN_CORR = 0.4;
+}
+
 const W           = 2 * Math.PI * CONFIG.FREQ_HZ;   // angular frequency [rad/s]
 const FAIL_RMSE   = CONFIG.FAIL_RATIO * W;
 const WARN_RMSE   = CONFIG.WARN_RATIO * W;
@@ -469,9 +487,14 @@ function closeCalibration() {
     const covGA = c.sga / c.n - mg * ma;
     c.g0 = mg;
     c.k = varG > 1e-8 ? covGA / varG : 0;
-    // A sane pursuit must move the irises in the same direction as the dot,
-    // by a measurable amount. Anything else means the face was not tracked.
-    c.ok = isFinite(c.k) && c.k > 0.5 && c.k < 400;
+    // A sane pursuit must move the irises with the dot, by a measurable amount.
+    // Magnitude, not sign: CAMERA_X_FLIP is a fixed guess at which way a given
+    // browser/device hands back the raw (non-CSS-mirrored) camera frame, and that
+    // convention isn't guaranteed consistent across devices. Requiring c.k to be
+    // positive would silently void a real, working calibration on any device where
+    // that guess is backwards — the sign is exactly what this per-session fit is
+    // for, so let it be either.
+    c.ok = isFinite(c.k) && Math.abs(c.k) > 0.5 && Math.abs(c.k) < 400;
   }
   state.phase = PHASE.TESTING;
   el.phaseLabel.textContent = "2 · Tracking";
