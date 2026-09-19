@@ -47,6 +47,15 @@ const CONFIG = {
   EAR_BLINK:        0.21,   // eye-aspect-ratio below this = lid closed
   BLINK_BLANK_MS:   180,    // samples discarded after a blink, while the iris re-settles
 
+  // Head yaw is not compensated (see README) — turning or shaking the head moves the
+  // iris estimate exactly like moving the eyes does, so an untracked head can forge a
+  // pursuit signal. Rather than estimate yaw, treat a fast-moving head reference point
+  // as invalid data, the same way a blink already is: real pursuit happens with the
+  // head still, so head speed above this is not a sample to score, it's noncompliance.
+  HEAD_MOVE_LIMIT:  0.5,     // head-centre speed, interocular-widths/s, above which a frame is discarded
+  HEAD_BLANK_MS:    150,     // samples discarded after a head-movement spike, while it settles
+  HEAD_EMA_ALPHA:   0.25,    // smoothing on the head-centre point before its speed is measured
+
   // --- within-subject scoring (primary) ---
   // Smooth-pursuit quality varies hugely between healthy people: eye colour, glasses,
   // camera, seating distance. Any fixed line is wrong for someone. So the first scored
@@ -67,6 +76,15 @@ const CONFIG = {
   SACCADE_ACC:      40,     // |eye acceleration| above this = corrective jump [amplitude/s²]
   SACCADE_REFRACT:  0.12,   // s, minimum gap between counted saccades
   MIN_VALID_FRAC:   0.70,   // below this the run is void, not a fail
+
+  // Pearson correlation between eye position and the lag-shifted target position.
+  // Real pursuit — even noisy, laggy, fatigued pursuit — still follows the target's
+  // slow back-and-forth path, so this stays high. Random/erratic eye movement does
+  // not. Gated independently of the RMSE ratio because RMSE alone can't be trusted
+  // here: EMA smoothing + the derivative window low-pass most fast jitter down to
+  // near zero, which drags velocity RMSE down too, not up, exactly when the driver
+  // isn't tracking at all.
+  MIN_CORR:         0.5,
 
   // Search range for the cross-correlation lag used to compensate RMSE for reaction
   // time. Capped near the upper end of normal smooth-pursuit latency (~100-200 ms) —
@@ -135,9 +153,11 @@ const state = {
   // calibration accumulators
   cal: { n: 0, sg: 0, sa: 0, sgg: 0, sga: 0, k: 1, g0: 0, ok: false },
   emaGaze: null,
+  emaHead: null,
   blankUntil: 0,
   lastSaccadeT: -1,
   blinks: 0, blinkOpen: true,
+  prevHeadCenter: null, prevHeadT: null,
   fpsFrames: 0, fpsT0: 0,
   lastChartT: 0
 };
@@ -280,7 +300,11 @@ function extractGaze(lm, w, h) {
     gaze: CAMERA_X_FLIP * (gl + gr) / 2,
     ear: (earL + earR) / 2,
     iris: [irisL, irisR],
-    corners: [lOut, lIn, rIn, rOut]
+    corners: [lOut, lIn, rIn, rOut],
+    // Head reference point, for detecting head movement (see HEAD_MOVE_LIMIT).
+    // Not yaw-corrected — just "is the head drifting/shaking", not "which way is it turned".
+    headCenter: mid(lCentre, rCentre),
+    interocular
   };
 }
 
@@ -351,6 +375,37 @@ function processSample(t, nowMs, info) {
     return;
   }
   state.blinkOpen = true;
+
+  // Head movement: compare this frame's head-centre position against the last one,
+  // in interocular widths per second so it stays comparable across distance from the
+  // camera. A fast-moving head is discarded the same way a blink is — it isn't eye
+  // tracking data, whatever gaze offset it produces.
+  // The head centre is EMA-smoothed first, same reason the gaze signal is: raw
+  // landmark jitter, two-point-differenced at 30-60 fps, is noise, not motion, and
+  // would otherwise trip this on nearly every frame of an honest run.
+  state.emaHead = state.emaHead === null
+    ? info.headCenter
+    : {
+        x: CONFIG.HEAD_EMA_ALPHA * info.headCenter.x + (1 - CONFIG.HEAD_EMA_ALPHA) * state.emaHead.x,
+        y: CONFIG.HEAD_EMA_ALPHA * info.headCenter.y + (1 - CONFIG.HEAD_EMA_ALPHA) * state.emaHead.y
+      };
+  const headNow = state.emaHead;
+
+  if (state.prevHeadCenter !== null && info.interocular > 0) {
+    const dtHead = t - state.prevHeadT;
+    if (dtHead > 0) {
+      const headSpeed = dist(headNow, state.prevHeadCenter) / info.interocular / dtHead;
+      if (headSpeed > CONFIG.HEAD_MOVE_LIMIT) {
+        state.prevHeadCenter = headNow;
+        state.prevHeadT = t;
+        state.blankUntil = nowMs + CONFIG.HEAD_BLANK_MS;
+        pushSample(t, aPos, aVel, null, null, null, false, "headmove");
+        return;
+      }
+    }
+  }
+  state.prevHeadCenter = headNow;
+  state.prevHeadT = t;
 
   // Exponential smoothing of the raw gaze signal before differentiation.
   state.emaGaze = state.emaGaze === null
@@ -508,8 +563,9 @@ function startTest() {
   // reset
   state.samples = []; state.gaze = []; state.vel = [];
   state.cal = { n: 0, sg: 0, sa: 0, sgg: 0, sga: 0, k: 1, g0: 0, ok: false };
-  state.emaGaze = null; state.blankUntil = 0; state.lastSaccadeT = -1;
+  state.emaGaze = null; state.emaHead = null; state.blankUntil = 0; state.lastSaccadeT = -1;
   state.saccades = 0; state.blinks = 0; state.blinkOpen = true;
+  state.prevHeadCenter = null; state.prevHeadT = null;
   resetChart();
   setMetrics(null);
   setVerdict("void", "Running", "Follow the dot. Keep your head still.");
@@ -551,6 +607,18 @@ function finishTest() {
     setVerdict("void", "Void",
       "Not enough usable eye data to score this run. Brighten the room, remove glare from glasses, sit closer, and keep your head still.");
     setStage("Void", "The run could not be scored. Try again with better lighting and a still head.");
+    return;
+  }
+
+  // Gate on correlation before anything baseline-relative even runs. This catches
+  // eye movement that doesn't follow the target's path at all — including a first
+  // run bad enough that it would otherwise get accepted as the baseline and make
+  // every later equally-bad run look fine by comparison.
+  if (r.corr < CONFIG.MIN_CORR) {
+    el.mRatio.textContent = "—";
+    setVerdict("fail", "Fail",
+      `Eye position barely tracks the target's path (correlation ${r.corr.toFixed(2)}, need ${CONFIG.MIN_CORR}). This isn't smooth pursuit. Follow the dot continuously with your eyes only.`);
+    setStage("Scored", "Results are on the right. Press start to run it again.");
     return;
   }
 
