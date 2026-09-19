@@ -51,7 +51,11 @@ const CONFIG = {
   // Smooth-pursuit quality varies hugely between healthy people: eye colour, glasses,
   // camera, seating distance. Any fixed line is wrong for someone. So the first scored
   // run becomes that person's rested baseline and later runs are judged against it.
-  BASELINE_KEY:     "blinkcheck.baseline.v1",
+  // Bumped to v2: the RMSE formula changed (lag-compensated), so a baseline
+  // recorded under v1 is on a different scale and would silently make every
+  // later run look better than it is. Versioning the key invalidates it and
+  // forces a fresh baseline under the current formula.
+  BASELINE_KEY:     "blinkcheck.baseline.v2",
   WARN_MULT:        1.8,    // RMSE ≥ 1.8 × baseline  → borderline
   FAIL_MULT:        2.5,    // RMSE ≥ 2.5 × baseline  → fail
 
@@ -64,7 +68,12 @@ const CONFIG = {
   SACCADE_REFRACT:  0.12,   // s, minimum gap between counted saccades
   MIN_VALID_FRAC:   0.70,   // below this the run is void, not a fail
 
-  MAX_LAG_MS:       500,    // search range for the cross-correlation lag
+  // Search range for the cross-correlation lag used to compensate RMSE for reaction
+  // time. Capped near the upper end of normal smooth-pursuit latency (~100-200 ms) —
+  // wide enough to stop a healthy driver's ordinary lag from reading as error, but
+  // not so wide that genuinely slow/delayed tracking (the fatigue signal this test
+  // exists to catch) gets fully absorbed and disappears from the score.
+  MAX_LAG_MS:       250,
   LAG_STEP_MS:      10,
 
   CHART_MS:         80,     // chart refresh interval
@@ -451,17 +460,14 @@ function scoreRun() {
     return { void: true, validFrac, rmse: NaN, gain: NaN, lagMs: NaN, saccRate: NaN };
   }
 
-  // RMSE of the velocity error e(t) = v̂(t) - ȧ(t)
-  let sse = 0;
-  for (const s of good) { const e = s.eyeVel - s.aVel; sse += e * e; }
-  const rmse = Math.sqrt(sse / good.length);
-
   // Pursuit gain: projection of eye position onto the stimulus,  Σ(x̂·a)/Σ(a²)
   let sxa = 0, saa = 0;
   for (const s of good) { sxa += s.eyePos * s.aPos; saa += s.aPos * s.aPos; }
   const gain = saa > 1e-9 ? sxa / saa : NaN;
 
   // Tracking lag: shift the stimulus back in time until it best correlates with the eye.
+  // No human visual-motor system has zero latency — normal smooth-pursuit reaction
+  // time is on the order of 100-200 ms — so this has to be measured, not assumed away.
   const dt = (good[good.length - 1].t - good[0].t) / (good.length - 1);
   const maxLagN = Math.round((CONFIG.MAX_LAG_MS / 1000) / dt);
   const stepN = Math.max(1, Math.round((CONFIG.LAG_STEP_MS / 1000) / dt));
@@ -474,6 +480,21 @@ function scoreRun() {
     if (r > bestR) { bestR = r; bestLag = L; }
   }
   const lagMs = bestLag * dt * 1000;
+
+  // RMSE of the velocity error e(t) = v̂(t) - ȧ(t), AFTER aligning for that lag.
+  // Scoring against the zero-latency stimulus velocity would count a driver's fixed,
+  // healthy reaction time as tracking error every time the dot changes direction —
+  // exactly the "no human can pass this" failure mode. What should actually cost
+  // points is scatter and gain error around the lagged fit, which is what fatigue
+  // degrades.
+  const eyeVelAligned = good.slice(bestLag).map((s) => s.eyeVel);
+  const aVelAligned = good.slice(0, good.length - bestLag).map((s) => s.aVel);
+  let sse = 0;
+  for (let i = 0; i < eyeVelAligned.length; i++) {
+    const e = eyeVelAligned[i] - aVelAligned[i];
+    sse += e * e;
+  }
+  const rmse = Math.sqrt(sse / eyeVelAligned.length);
 
   const duration = good[good.length - 1].t - good[0].t;
   const saccRate = (state.saccades || 0) / Math.max(duration, 0.001);
