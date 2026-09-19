@@ -65,8 +65,8 @@ const CONFIG = {
   // later run look better than it is. Versioning the key invalidates it and
   // forces a fresh baseline under the current formula.
   BASELINE_KEY:     "blinkcheck.baseline.v2",
-  WARN_MULT:        1.8,    // RMSE ≥ 1.8 × baseline  → borderline
-  FAIL_MULT:        2.5,    // RMSE ≥ 2.5 × baseline  → fail
+  WARN_MULT:        1.2,    // RMSE ≥ 1.2 × baseline  → borderline
+  FAIL_MULT:        1.5,    // RMSE ≥ 1.5 × baseline  → fail
 
   // --- absolute fallback, used only when no baseline is stored ---
   // Fractions of the peak target speed w. Provisional; the baseline path is the real test.
