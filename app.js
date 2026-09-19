@@ -52,8 +52,8 @@ const CONFIG = {
   // camera, seating distance. Any fixed line is wrong for someone. So the first scored
   // run becomes that person's rested baseline and later runs are judged against it.
   BASELINE_KEY:     "blinkcheck.baseline.v1",
-  WARN_MULT:        1.4,    // RMSE ≥ 1.4 × baseline  → borderline
-  FAIL_MULT:        1.8,    // RMSE ≥ 1.8 × baseline  → fail
+  WARN_MULT:        1.8,    // RMSE ≥ 1.8 × baseline  → borderline
+  FAIL_MULT:        2.5,    // RMSE ≥ 2.5 × baseline  → fail
 
   // --- absolute fallback, used only when no baseline is stored ---
   // Fractions of the peak target speed w. Provisional; the baseline path is the real test.
