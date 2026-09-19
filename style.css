@@ -49,6 +49,28 @@ body { font-synthesis-weight: none; }
   opacity: 0.9;
 }
 
+/* ---------- reaction target ---------- */
+.target {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 0 3px rgba(255, 176, 32, 0.25), 0 0 26px 6px rgba(255, 176, 32, 0.45);
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.target::after {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  border-radius: 50%;
+  background: #15202B;
+  opacity: 0.85;
+}
+
 /* ---------- readouts ---------- */
 .readout {
   font-family: "Barlow Condensed", Barlow, sans-serif;
@@ -85,11 +107,11 @@ body { font-synthesis-weight: none; }
 }
 .metric dd small { font-size: 0.8rem; color: var(--muted); margin-left: 2px; }
 
-/* verdict colouring, set from app.js */
-.verdict-pass  #verdictText { color: var(--trace); }
-.verdict-watch #verdictText { color: var(--amber); }
-.verdict-fail  #verdictText { color: var(--signal); }
-.verdict-void  #verdictText { color: var(--muted); }
+/* verdict colouring, set from app.js. Shared by both tests' verdict cards. */
+.verdict-pass  #verdictText, .verdict-pass  #reactionVerdictText { color: var(--trace); }
+.verdict-watch #verdictText, .verdict-watch #reactionVerdictText { color: var(--amber); }
+.verdict-fail  #verdictText, .verdict-fail  #reactionVerdictText { color: var(--signal); }
+.verdict-void  #verdictText, .verdict-void  #reactionVerdictText { color: var(--muted); }
 
 /* ---------- buttons ---------- */
 .btn {

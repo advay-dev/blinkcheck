@@ -128,7 +128,14 @@ const el = {
   verdict: $("verdict"), verdictText: $("verdictText"), verdictDetail: $("verdictDetail"),
   mRmse: $("mRmse"), mGain: $("mGain"), mLag: $("mLag"),
   mSacc: $("mSacc"), mBlink: $("mBlink"), mValid: $("mValid"),
-  cfgFreq: $("cfgFreq"), cfgPeak: $("cfgPeak")
+  cfgFreq: $("cfgFreq"), cfgPeak: $("cfgPeak"),
+  // --- reaction test ---
+  rStage: $("reactionStage"), rTarget: $("reactionTarget"),
+  rMsg: $("reactionMsg"), rTitle: $("reactionTitle"), rSub: $("reactionSub"),
+  rRoundLabel: $("reactionRoundLabel"), rClock: $("reactionClock"), rProgress: $("reactionProgress"),
+  btnReactionStart: $("btnReactionStart"), btnReactionAbort: $("btnReactionAbort"),
+  rVerdict: $("reactionVerdict"), rVerdictText: $("reactionVerdictText"), rVerdictDetail: $("reactionVerdictDetail"),
+  rMean: $("rMean"), rWorst: $("rWorst"), rMiss: $("rMiss"), rFalse: $("rFalse")
 };
 const ctx2d = el.overlay.getContext("2d");
 
@@ -777,6 +784,188 @@ function downloadCsv() {
   URL.revokeObjectURL(url);
 }
 
+/* ============================================================================
+   Reaction test — a second, independent screen. Ten targets appear one at a
+   time, at a random position and after a random delay; tap each the instant
+   it appears. Unlike pursuit RMSE, simple visual-motor reaction time is a
+   well-studied quantity, so this scores against absolute thresholds rather
+   than a self-baseline — but "well-studied" is not the same as "validated
+   for this exact task": these numbers are still provisional guesses, same
+   caveat as everything in CONFIG above.
+   ============================================================================ */
+
+const REACTION_CONFIG = {
+  ROUNDS:           10,      // targets per run
+  MIN_DELAY_MS:     600,     // shortest gap before a target appears
+  MAX_DELAY_MS:     2200,    // longest gap before a target appears — randomised so the
+                             // timing can't be anticipated instead of actually reacted to
+  TARGET_MS:        2000,    // a target left untapped this long counts as a miss
+  MARGIN_PCT:       [12, 88, 15, 85], // [minX, maxX, minY, maxY] safe spawn area, %
+
+  WARN_MEAN_MS:     450,     // mean reaction time at/above this -> borderline
+  FAIL_MEAN_MS:     600,     // mean reaction time at/above this -> fail
+  MAX_MISSES:       1,       // more misses than this fails outright; a miss is a lapse
+  MAX_FALSE_STARTS: 2        // more taps-on-nothing than this fails outright
+};
+
+const reaction = {
+  phase: "idle",   // idle | running | done
+  round: 0,
+  results: [],     // {rt: ms} for a hit, {rt: null} for a timeout miss
+  falseStarts: 0,
+  armed: false,
+  shownAt: 0,
+  spawnTimer: null,
+  timeoutId: null
+};
+
+function reactionDelay() {
+  return REACTION_CONFIG.MIN_DELAY_MS + Math.random() * (REACTION_CONFIG.MAX_DELAY_MS - REACTION_CONFIG.MIN_DELAY_MS);
+}
+
+function spawnTarget() {
+  const [minX, maxX, minY, maxY] = REACTION_CONFIG.MARGIN_PCT;
+  el.rTarget.style.left = (minX + Math.random() * (maxX - minX)) + "%";
+  el.rTarget.style.top  = (minY + Math.random() * (maxY - minY)) + "%";
+  el.rTarget.classList.remove("hidden");
+  reaction.shownAt = performance.now();
+  reaction.armed = true;
+  reaction.timeoutId = setTimeout(onTargetTimeout, REACTION_CONFIG.TARGET_MS);
+}
+
+function onTargetTimeout() {
+  reaction.armed = false;
+  el.rTarget.classList.add("hidden");
+  reaction.results.push({ rt: null });
+  advanceReactionRound();
+}
+
+function onTargetTap() {
+  if (!reaction.armed) return;
+  const rt = performance.now() - reaction.shownAt;
+  clearTimeout(reaction.timeoutId);
+  reaction.armed = false;
+  el.rTarget.classList.add("hidden");
+  reaction.results.push({ rt });
+  advanceReactionRound();
+}
+
+function advanceReactionRound() {
+  reaction.round++;
+  updateReactionProgress();
+  if (reaction.round >= REACTION_CONFIG.ROUNDS) { finishReaction(); return; }
+  reaction.spawnTimer = setTimeout(spawnTarget, reactionDelay());
+}
+
+function updateReactionProgress() {
+  el.rClock.textContent = `${reaction.round} / ${REACTION_CONFIG.ROUNDS}`;
+  el.rProgress.style.width = clamp(reaction.round / REACTION_CONFIG.ROUNDS * 100, 0, 100) + "%";
+}
+
+function startReaction() {
+  clearTimeout(reaction.spawnTimer);
+  clearTimeout(reaction.timeoutId);
+  reaction.phase = "running";
+  reaction.round = 0;
+  reaction.results = [];
+  reaction.falseStarts = 0;
+  reaction.armed = false;
+  el.rTarget.classList.add("hidden");
+  el.rMsg.classList.add("hidden");
+  el.rRoundLabel.textContent = "Running";
+  el.btnReactionStart.disabled = true;
+  el.btnReactionAbort.classList.remove("hidden");
+  setReactionMetrics(null);
+  setReactionVerdict("void", "Running", "Tap each target the instant it appears.");
+  updateReactionProgress();
+  reaction.spawnTimer = setTimeout(spawnTarget, reactionDelay());
+}
+
+function abortReaction(message) {
+  clearTimeout(reaction.spawnTimer);
+  clearTimeout(reaction.timeoutId);
+  reaction.phase = "idle";
+  reaction.armed = false;
+  el.rTarget.classList.add("hidden");
+  el.btnReactionStart.disabled = false;
+  el.btnReactionAbort.classList.add("hidden");
+  el.rProgress.style.width = "0%";
+  el.rRoundLabel.textContent = "Standby";
+  setReactionStage("Stopped", message || "Test stopped. Press start when you are ready to go again.");
+}
+
+function finishReaction() {
+  reaction.phase = "done";
+  el.rTarget.classList.add("hidden");
+  el.btnReactionStart.disabled = false;
+  el.btnReactionStart.textContent = "Run the test again";
+  el.btnReactionAbort.classList.add("hidden");
+  el.rRoundLabel.textContent = "Scored";
+  el.rProgress.style.width = "100%";
+
+  const r = scoreReaction();
+  setReactionMetrics(r);
+
+  if (r.void) {
+    setReactionVerdict("void", "Void", "No valid taps recorded. Try again and tap the target as soon as it appears.");
+    setReactionStage("Void", "The run could not be scored.");
+    return;
+  }
+
+  if (r.misses > REACTION_CONFIG.MAX_MISSES || r.falseStarts > REACTION_CONFIG.MAX_FALSE_STARTS || r.meanMs >= REACTION_CONFIG.FAIL_MEAN_MS) {
+    setReactionVerdict("fail", "Fail",
+      `Mean reaction time ${Math.round(r.meanMs)} ms, ${r.misses} miss(es), ${r.falseStarts} false start(s). Reaction speed and attention look degraded.`);
+  } else if (r.misses >= REACTION_CONFIG.MAX_MISSES || r.meanMs >= REACTION_CONFIG.WARN_MEAN_MS) {
+    setReactionVerdict("watch", "Borderline",
+      `Mean reaction time ${Math.round(r.meanMs)} ms. Getting slower — rest before a long shift.`);
+  } else {
+    setReactionVerdict("pass", "Pass",
+      `Mean reaction time ${Math.round(r.meanMs)} ms, slowest ${Math.round(r.worstMs)} ms. Reflexes look sharp.`);
+  }
+  setReactionStage("Scored", "Results are on the right. Press start to run it again.");
+}
+
+function scoreReaction() {
+  const hits = reaction.results.filter((x) => x.rt !== null);
+  const misses = reaction.results.length - hits.length;
+  if (hits.length === 0) {
+    return { void: true, meanMs: NaN, worstMs: NaN, misses, falseStarts: reaction.falseStarts };
+  }
+  const meanMs = hits.reduce((s, x) => s + x.rt, 0) / hits.length;
+  const worstMs = Math.max(...hits.map((x) => x.rt));
+  return { void: false, meanMs, worstMs, misses, falseStarts: reaction.falseStarts };
+}
+
+function setReactionStage(title, sub) {
+  el.rTitle.textContent = title;
+  el.rSub.textContent = sub;
+  el.rMsg.classList.remove("hidden");
+}
+
+function setReactionVerdict(kind, text, detail) {
+  el.rVerdict.classList.remove("verdict-pass", "verdict-watch", "verdict-fail", "verdict-void");
+  el.rVerdict.classList.add("verdict-" + kind);
+  el.rVerdictText.textContent = text;
+  el.rVerdictDetail.textContent = detail;
+}
+
+function setReactionMetrics(r) {
+  const dash = "—";
+  if (!r) {
+    el.rMean.textContent = dash; el.rWorst.textContent = dash;
+    el.rMiss.textContent = dash; el.rFalse.textContent = dash;
+    return;
+  }
+  el.rMiss.textContent = String(r.misses);
+  el.rFalse.textContent = String(r.falseStarts);
+  if (r.void) {
+    el.rMean.textContent = dash; el.rWorst.textContent = dash;
+    return;
+  }
+  el.rMean.innerHTML = Math.round(r.meanMs) + '<small> ms</small>';
+  el.rWorst.innerHTML = Math.round(r.worstMs) + '<small> ms</small>';
+}
+
 /* ---------------------------------------------------------------- wiring -- */
 
 el.btnCamera.addEventListener("click", initCamera);
@@ -789,9 +978,25 @@ el.btnBaseline.addEventListener("click", clearBaseline);
 
 showBaseline();
 
+el.btnReactionStart.addEventListener("click", () => {
+  if (reaction.phase === "idle" || reaction.phase === "done") startReaction();
+});
+el.btnReactionAbort.addEventListener("click", () => abortReaction());
+el.rStage.addEventListener("click", (e) => {
+  if (reaction.phase !== "running") return;
+  if (e.target.closest("#reactionTarget")) {
+    onTargetTap();
+  } else if (!reaction.armed) {
+    reaction.falseStarts++;
+  }
+});
+
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && (state.phase === PHASE.CALIBRATING || state.phase === PHASE.TESTING)) {
     abortTest("The tab lost focus, so the run was discarded. Start again with this tab in front.");
+  }
+  if (document.hidden && reaction.phase === "running") {
+    abortReaction("The tab lost focus, so the run was discarded. Start again with this tab in front.");
   }
 });
 
