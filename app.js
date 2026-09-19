@@ -59,12 +59,8 @@ const CONFIG = {
   // --- within-subject scoring (primary) ---
   // Smooth-pursuit quality varies hugely between healthy people: eye colour, glasses,
   // camera, seating distance. Any fixed line is wrong for someone. So the first scored
-  // run becomes that person's rested baseline and later runs are judged against it.
-  // Bumped to v2: the RMSE formula changed (lag-compensated), so a baseline
-  // recorded under v1 is on a different scale and would silently make every
-  // later run look better than it is. Versioning the key invalidates it and
-  // forces a fresh baseline under the current formula.
-  BASELINE_KEY:     "blinkcheck.baseline.v2",
+  // run becomes that driver's rested baseline (now stored on their profile — see the
+  // "driver profiles" section below) and later runs are judged against it.
   WARN_MULT:        1.2,    // RMSE ≥ 1.2 × baseline  → borderline
   FAIL_MULT:        1.3,    // RMSE ≥ 1.3 × baseline  → fail
 
@@ -161,7 +157,12 @@ const el = {
   rRoundLabel: $("reactionRoundLabel"), rClock: $("reactionClock"), rProgress: $("reactionProgress"),
   btnReactionStart: $("btnReactionStart"), btnReactionAbort: $("btnReactionAbort"),
   rVerdict: $("reactionVerdict"), rVerdictText: $("reactionVerdictText"), rVerdictDetail: $("reactionVerdictDetail"),
-  rMedian: $("rMedian"), rWorst: $("rWorst"), rMiss: $("rMiss"), rFalse: $("rFalse")
+  rMedian: $("rMedian"), rWorst: $("rWorst"), rMiss: $("rMiss"), rFalse: $("rFalse"),
+  // --- driver profiles ---
+  driverName: $("driverName"), btnDriverSelect: $("btnDriverSelect"),
+  driverProfile: $("driverProfile"), driverProfileName: $("driverProfileName"),
+  driverStrikes: $("driverStrikes"), driverBaseline: $("driverBaseline"),
+  driverPursuitStats: $("driverPursuitStats"), driverReactionStats: $("driverReactionStats")
 };
 const ctx2d = el.overlay.getContext("2d");
 
@@ -177,6 +178,7 @@ const state = {
   landmarker: null,
   stream: null,
   running: false,
+  cameraReady: false, // camera + face model loaded; the other half of the start-button gate is an active driver
   lastVideoTime: -1,
   t0: 0,                 // performance.now() at test start
   // rolling buffers
@@ -282,9 +284,10 @@ async function initCamera() {
 
   state.phase = PHASE.READY;
   state.running = true;
+  state.cameraReady = true;
   state.fpsT0 = performance.now();
   el.btnCamera.textContent = "Camera on";
-  el.btnStart.disabled = false;
+  updateStartGating();
   el.hint.textContent = "Sit an arm's length away. Head still, eyes only.";
   setStage("Ready", "Press start, then follow the red dot with your eyes. Do not turn your head.");
   requestAnimationFrame(loop);
@@ -511,36 +514,125 @@ function closeCalibration() {
   }
 }
 
-/* -------------------------------------------------------------- baseline -- */
-/* Stored per browser profile in localStorage. One device per driver is the
-   assumption; a real fleet deployment would key this to a driver ID instead. */
+/* ----------------------------------------------------- driver profiles -- */
+/* A repository of driver profiles, kept in this browser's localStorage. This is a
+   shared-device model (e.g. a depot kiosk) deliberately, not a cloud service: the
+   whole app is static files with no backend, so a profile lives on the device it
+   was created on and doesn't follow a driver anywhere else. Each profile owns its
+   own baseline (previously one global value per device), a strike count, running
+   pass/borderline/fail/void stats for both tests, and a capped history log. */
 
-function loadBaseline() {
+const DRIVERS_KEY = "blinkcheck.drivers.v1";
+const DRIVER_HISTORY_CAP = 50; // per driver; oldest entries drop first
+
+function emptyDriverStats() {
+  return { pass: 0, watch: 0, fail: 0, void: 0 };
+}
+
+function loadDrivers() {
   try {
-    const raw = localStorage.getItem(CONFIG.BASELINE_KEY);
-    if (!raw) return null;
-    const b = JSON.parse(raw);
-    return (b && isFinite(b.rmse) && b.rmse > 0) ? b : null;
-  } catch { return null; }
+    const raw = localStorage.getItem(DRIVERS_KEY);
+    const store = raw ? JSON.parse(raw) : null;
+    return (store && typeof store.drivers === "object") ? store : { activeId: null, drivers: {} };
+  } catch { return { activeId: null, drivers: {} }; }
 }
 
-function saveBaseline(r) {
+function saveDrivers(store) {
+  try { localStorage.setItem(DRIVERS_KEY, JSON.stringify(store)); } catch { /* private mode */ }
+}
+
+function getActiveDriver() {
+  const store = loadDrivers();
+  return store.activeId ? (store.drivers[store.activeId] || null) : null;
+}
+
+/** Selects an existing driver by name, or creates one. Becomes the active driver. */
+function selectDriver(name) {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  const id = trimmed.toLowerCase();
+  const store = loadDrivers();
+  if (!store.drivers[id]) {
+    store.drivers[id] = {
+      id, name: trimmed, created: new Date().toISOString(),
+      baseline: null, strikes: 0,
+      stats: { pursuit: emptyDriverStats(), reaction: emptyDriverStats() },
+      history: []
+    };
+  }
+  store.activeId = id;
+  saveDrivers(store);
+  return store.drivers[id];
+}
+
+/** Records a scored (non-baseline-setting) result against the active driver.
+ *  kind is "pass" | "watch" | "fail" | "void" — a "fail" is a strike. */
+function recordResult(testType, kind, detail) {
+  const store = loadDrivers();
+  const driver = store.activeId ? store.drivers[store.activeId] : null;
+  if (!driver) return;
+  driver.stats[testType][kind] = (driver.stats[testType][kind] || 0) + 1;
+  if (kind === "fail") driver.strikes++;
+  driver.history.push({ t: new Date().toISOString(), test: testType, verdict: kind, detail });
+  if (driver.history.length > DRIVER_HISTORY_CAP) driver.history.shift();
+  saveDrivers(store);
+  showDriverProfile();
+}
+
+function saveDriverBaseline(r) {
+  const store = loadDrivers();
+  const driver = store.activeId ? store.drivers[store.activeId] : null;
+  if (!driver) return null;
   const rmse = Math.min(r.rmse, CONFIG.BASELINE_RMSE_CAP);
-  const b = { rmse, gain: r.gain, lagMs: r.lagMs, recorded: new Date().toISOString() };
-  try { localStorage.setItem(CONFIG.BASELINE_KEY, JSON.stringify(b)); } catch { /* private mode */ }
-  return b;
+  driver.baseline = { rmse, gain: r.gain, lagMs: r.lagMs, recorded: new Date().toISOString() };
+  saveDrivers(store);
+  return driver.baseline;
 }
 
-function clearBaseline() {
-  try { localStorage.removeItem(CONFIG.BASELINE_KEY); } catch { /* ignore */ }
-  showBaseline();
-  setVerdict("void", "Baseline cleared", "The next scored run becomes the new rested baseline. Record it while the driver is alert.");
+function clearDriverBaseline() {
+  const store = loadDrivers();
+  const driver = store.activeId ? store.drivers[store.activeId] : null;
+  if (!driver) return;
+  driver.baseline = null;
+  saveDrivers(store);
+  showDriverProfile();
+  setVerdict("void", "Baseline cleared", "The next scored run becomes this driver's new rested baseline. Record it while they're alert.");
 }
 
-function showBaseline() {
-  const b = loadBaseline();
-  el.mBase.innerHTML = b ? b.rmse.toFixed(3) + '<small> /s</small>' : "not set";
-  el.btnBaseline.disabled = !b;
+function showDriverProfile() {
+  const driver = getActiveDriver();
+  if (!driver) {
+    el.driverProfile.classList.add("hidden");
+    el.mBase.innerHTML = "not set";
+    el.btnBaseline.disabled = true;
+    return;
+  }
+  el.driverProfile.classList.remove("hidden");
+  el.driverProfileName.textContent = driver.name;
+  el.driverStrikes.textContent = String(driver.strikes);
+  const baselineText = driver.baseline ? driver.baseline.rmse.toFixed(3) + '<small> /s</small>' : "not set";
+  el.driverBaseline.innerHTML = baselineText;
+  el.mBase.innerHTML = baselineText;
+  el.btnBaseline.disabled = !driver.baseline;
+  const p = driver.stats.pursuit, r = driver.stats.reaction;
+  el.driverPursuitStats.textContent = `${p.pass} / ${p.watch} / ${p.fail} / ${p.void}`;
+  el.driverReactionStats.textContent = `${r.pass} / ${r.watch} / ${r.fail} / ${r.void}`;
+}
+
+function updateStartGating() {
+  el.btnStart.disabled = !(state.cameraReady && getActiveDriver());
+}
+
+function updateReactionGating() {
+  el.btnReactionStart.disabled = !getActiveDriver();
+}
+
+/** Locks driver switching while either test is running. Both tests read the active
+ *  driver at scoring time, so switching mid-run risks crashing (pursuit dereferences
+ *  driver.baseline) or misattributing a result to the wrong driver (reaction). */
+function updateDriverLock() {
+  const pursuitRunning = state.phase === PHASE.CALIBRATING || state.phase === PHASE.TESTING;
+  el.btnDriverSelect.disabled = pursuitRunning || reaction.phase === "running";
 }
 
 /* --------------------------------------------------------------- scoring -- */
@@ -617,12 +709,14 @@ function startTest() {
   el.btnStart.disabled = true;
   el.btnAbort.classList.remove("hidden");
   el.btnCsv.disabled = true;
+  updateDriverLock();
 }
 
 function abortTest(message) {
   state.phase = PHASE.READY;
   el.dot.classList.add("hidden");
-  el.btnStart.disabled = false;
+  updateStartGating();
+  updateDriverLock();
   el.btnAbort.classList.add("hidden");
   el.progress.style.width = "0%";
   el.phaseLabel.textContent = "Standby";
@@ -632,7 +726,8 @@ function abortTest(message) {
 function finishTest() {
   state.phase = PHASE.DONE;
   el.dot.classList.add("hidden");
-  el.btnStart.disabled = false;
+  updateStartGating();
+  updateDriverLock();
   el.btnStart.textContent = "Run the test again";
   el.btnAbort.classList.add("hidden");
   el.btnCsv.disabled = false;
@@ -642,7 +737,10 @@ function finishTest() {
   const r = scoreRun();
   setMetrics(r);
 
+  const driver = getActiveDriver();
+
   if (r.void) {
+    if (driver) recordResult("pursuit", "void", { validFrac: r.validFrac });
     setVerdict("void", "Void",
       "Not enough usable eye data to score this run. Brighten the room, remove glare from glasses, sit closer, and keep your head still.");
     setStage("Void", "The run could not be scored. Try again with better lighting and a still head.");
@@ -655,25 +753,24 @@ function finishTest() {
   // every later equally-bad run look fine by comparison.
   if (r.corr < CONFIG.MIN_CORR) {
     el.mRatio.textContent = "—";
+    if (driver) recordResult("pursuit", "fail", { reason: "no-correlation", corr: r.corr });
     setVerdict("fail", "Fail",
       `Eye position barely tracks the target's path (correlation ${r.corr.toFixed(2)}, need ${CONFIG.MIN_CORR}). This isn't smooth pursuit. Follow the dot continuously with your eyes only.`);
     setStage("Scored", "Results are on the right. Press start to run it again.");
     return;
   }
 
-  const baseline = loadBaseline();
-
-  // --- first valid run: record the rested baseline, do not judge it ---
-  if (!baseline) {
-    const b = saveBaseline(r);
-    showBaseline();
+  // --- first valid run for this driver: record the rested baseline, do not judge it ---
+  if (driver && !driver.baseline) {
+    const b = saveDriverBaseline(r);
+    showDriverProfile();
     el.mRatio.textContent = "—";
     // Absolute thresholds survive only as a sanity check on the baseline itself:
     // a "rested" run this poor usually means bad tracking, not a bad driver.
     const suspect = r.rmse >= FAIL_RMSE || r.gain < 0.6 || r.lagMs > 400;
     const capped = r.rmse > CONFIG.BASELINE_RMSE_CAP;
     setVerdict("void", "Baseline recorded",
-      `This run is now the reference for this device: RMSE ${b.rmse.toFixed(3)} /s${capped ? ` (capped from ${r.rmse.toFixed(3)})` : ""}, gain ${r.gain.toFixed(2)}, lag ${Math.round(r.lagMs)} ms. It only means anything if the driver was alert when it was taken.` +
+      `This run is now ${driver.name}'s reference: RMSE ${b.rmse.toFixed(3)} /s${capped ? ` (capped from ${r.rmse.toFixed(3)})` : ""}, gain ${r.gain.toFixed(2)}, lag ${Math.round(r.lagMs)} ms. It only means anything if the driver was alert when it was taken.` +
       (suspect
         ? " These numbers look poor for a rested run — check lighting, glasses glare and head stillness, then reset the baseline and record it again."
         : " Retest later and the result is judged against this number."));
@@ -681,17 +778,20 @@ function finishTest() {
     return;
   }
 
-  // --- later runs: judged against the person's own rested number ---
-  const ratio = r.rmse / baseline.rmse;
+  // --- later runs: judged against the driver's own rested number ---
+  const ratio = r.rmse / driver.baseline.rmse;
   el.mRatio.innerHTML = ratio.toFixed(2) + '<small> ×</small>';
 
   if (ratio >= CONFIG.FAIL_MULT) {
+    recordResult("pursuit", "fail", { rmse: r.rmse, ratio, gain: r.gain, lagMs: r.lagMs });
     setVerdict("fail", "Fail",
       `Velocity error is ${ratio.toFixed(2)}× this driver's rested baseline, past the ${CONFIG.FAIL_MULT}× line. Pursuit is breaking into corrective jumps. Do not drive; get a proper assessment.`);
   } else if (ratio >= CONFIG.WARN_MULT) {
+    recordResult("pursuit", "watch", { rmse: r.rmse, ratio, gain: r.gain, lagMs: r.lagMs });
     setVerdict("watch", "Borderline",
       `Velocity error is ${ratio.toFixed(2)}× baseline, between the ${CONFIG.WARN_MULT}× and ${CONFIG.FAIL_MULT}× lines. Rest and retest before a long shift.`);
   } else {
+    recordResult("pursuit", "pass", { rmse: r.rmse, ratio, gain: r.gain, lagMs: r.lagMs });
     setVerdict("pass", "Pass",
       `Velocity error is ${ratio.toFixed(2)}× baseline, gain ${r.gain.toFixed(2)}, lag ${Math.round(r.lagMs)} ms. Pursuit is holding up.`);
   }
@@ -908,6 +1008,7 @@ function startReaction() {
   el.rRoundLabel.textContent = "Running";
   el.btnReactionStart.disabled = true;
   el.btnReactionAbort.classList.remove("hidden");
+  updateDriverLock();
   setReactionMetrics(null);
   setReactionVerdict("void", "Running", "Tap each target the instant it appears.");
   updateReactionProgress();
@@ -920,7 +1021,8 @@ function abortReaction(message) {
   reaction.phase = "idle";
   reaction.armed = false;
   el.rTarget.classList.add("hidden");
-  el.btnReactionStart.disabled = false;
+  updateReactionGating();
+  updateDriverLock();
   el.btnReactionAbort.classList.add("hidden");
   el.rProgress.style.width = "0%";
   el.rRoundLabel.textContent = "Standby";
@@ -930,7 +1032,8 @@ function abortReaction(message) {
 function finishReaction() {
   reaction.phase = "done";
   el.rTarget.classList.add("hidden");
-  el.btnReactionStart.disabled = false;
+  updateReactionGating();
+  updateDriverLock();
   el.btnReactionStart.textContent = "Run the test again";
   el.btnReactionAbort.classList.add("hidden");
   el.rRoundLabel.textContent = "Scored";
@@ -938,20 +1041,25 @@ function finishReaction() {
 
   const r = scoreReaction();
   setReactionMetrics(r);
+  const driver = getActiveDriver();
 
   if (r.void) {
+    if (driver) recordResult("reaction", "void", {});
     setReactionVerdict("void", "Void", "No valid taps recorded. Try again and tap the target as soon as it appears.");
     setReactionStage("Void", "The run could not be scored.");
     return;
   }
 
   if (r.misses > REACTION_CONFIG.MAX_MISSES || r.falseStarts > REACTION_CONFIG.MAX_FALSE_STARTS || r.medianMs >= REACTION_CONFIG.FAIL_MEDIAN_MS) {
+    if (driver) recordResult("reaction", "fail", { medianMs: r.medianMs, misses: r.misses, falseStarts: r.falseStarts });
     setReactionVerdict("fail", "Fail",
       `Median reaction time ${Math.round(r.medianMs)} ms, ${r.misses} miss(es), ${r.falseStarts} false start(s). Reaction speed and attention look degraded.`);
   } else if (r.misses >= REACTION_CONFIG.MAX_MISSES || r.medianMs >= REACTION_CONFIG.WARN_MEDIAN_MS) {
+    if (driver) recordResult("reaction", "watch", { medianMs: r.medianMs, misses: r.misses, falseStarts: r.falseStarts });
     setReactionVerdict("watch", "Borderline",
       `Median reaction time ${Math.round(r.medianMs)} ms. Getting slower — rest before a long shift.`);
   } else {
+    if (driver) recordResult("reaction", "pass", { medianMs: r.medianMs, misses: r.misses, falseStarts: r.falseStarts });
     setReactionVerdict("pass", "Pass",
       `Median reaction time ${Math.round(r.medianMs)} ms, slowest ${Math.round(r.worstMs)} ms. Reflexes look sharp.`);
   }
@@ -1012,9 +1120,23 @@ el.btnStart.addEventListener("click", () => {
 });
 el.btnAbort.addEventListener("click", () => abortTest());
 el.btnCsv.addEventListener("click", downloadCsv);
-el.btnBaseline.addEventListener("click", clearBaseline);
+el.btnBaseline.addEventListener("click", clearDriverBaseline);
 
-showBaseline();
+el.btnDriverSelect.addEventListener("click", () => {
+  const driver = selectDriver(el.driverName.value);
+  if (!driver) return;
+  el.driverName.value = "";
+  showDriverProfile();
+  updateStartGating();
+  updateReactionGating();
+});
+el.driverName.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") el.btnDriverSelect.click();
+});
+
+showDriverProfile();
+updateStartGating();
+updateReactionGating();
 
 el.btnReactionStart.addEventListener("click", () => {
   if (reaction.phase === "idle" || reaction.phase === "done") startReaction();

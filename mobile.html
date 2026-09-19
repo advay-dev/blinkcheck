@@ -64,6 +64,46 @@
 
 <main class="px-4 py-4 flex flex-col gap-4 max-w-[560px] mx-auto">
 
+  <!-- ============ DRIVER PROFILE ============ -->
+  <!-- Kept in this phone's localStorage — a shared-device model, not an account system.
+       Profiles don't follow a driver to a different device. -->
+  <section class="flex flex-col gap-3">
+    <div class="rounded-xl border border-rail bg-panel p-4 flex flex-col gap-2">
+      <label for="driverName" class="text-xs text-muted">Driver name</label>
+      <input id="driverName" type="text" placeholder="e.g. Jane Doe" autocomplete="off"
+             class="w-full rounded-lg bg-hull border border-rail px-3 py-2 text-sm text-ink focus:outline-none focus:border-amber" />
+      <button id="btnDriverSelect" class="btn btn-primary w-full">Start / switch driver</button>
+      <p class="text-xs text-muted">Existing name selects that profile; a new name creates one. Stored on this device only.</p>
+    </div>
+
+    <div id="driverProfile" class="rounded-xl border border-rail bg-panel p-4 hidden">
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <p class="text-xs text-muted">Active driver</p>
+          <p id="driverProfileName" class="font-cond text-2xl leading-none mt-1" style="font-weight:700">—</p>
+        </div>
+        <div class="text-right">
+          <p class="text-xs text-muted">Strikes</p>
+          <p id="driverStrikes" class="font-cond text-3xl leading-none mt-1" style="font-weight:700; color: var(--signal);">0</p>
+        </div>
+      </div>
+      <dl class="mt-3 divide-y divide-rail">
+        <div class="metric">
+          <dt>Baseline RMSE</dt>
+          <dd id="driverBaseline" class="readout">not set</dd>
+        </div>
+        <div class="metric">
+          <dt>Pursuit tests<span>Pass / borderline / fail / void</span></dt>
+          <dd id="driverPursuitStats" class="readout">0 / 0 / 0 / 0</dd>
+        </div>
+        <div class="metric">
+          <dt>Reaction tests<span>Pass / borderline / fail / void</span></dt>
+          <dd id="driverReactionStats" class="readout">0 / 0 / 0 / 0</dd>
+        </div>
+      </dl>
+    </div>
+  </section>
+
   <!-- ============ PURSUIT TEST ============ -->
   <section class="flex flex-col gap-4">
     <div id="stage" class="stage relative w-full overflow-hidden rounded-xl bg-black border border-rail">

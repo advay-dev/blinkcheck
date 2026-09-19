@@ -59,6 +59,48 @@
   </div>
 </header>
 
+<!-- ============ DRIVER PROFILE ============ -->
+<!-- Kept in this browser's localStorage — a shared-device model (e.g. a depot kiosk),
+     not an account system. Profiles don't follow a driver to a different device. -->
+<div class="mx-auto max-w-[1400px] px-5 pt-6">
+  <div class="rounded-xl border border-rail bg-panel p-4 flex flex-wrap items-end gap-3">
+    <div class="flex-1 min-w-[220px]">
+      <label for="driverName" class="text-xs text-muted">Driver name</label>
+      <input id="driverName" type="text" placeholder="e.g. Jane Doe" autocomplete="off"
+             class="mt-1 w-full rounded-lg bg-hull border border-rail px-3 py-2 text-sm text-ink focus:outline-none focus:border-amber" />
+    </div>
+    <button id="btnDriverSelect" class="btn btn-primary">Start / switch driver</button>
+    <p class="text-xs text-muted basis-full">Existing name selects that driver's profile; a new name creates one. Stored on this device only.</p>
+  </div>
+
+  <div id="driverProfile" class="mt-4 rounded-xl border border-rail bg-panel p-5 hidden">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <p class="text-xs text-muted">Active driver</p>
+        <p id="driverProfileName" class="font-cond text-3xl leading-none mt-1" style="font-weight:700">—</p>
+      </div>
+      <div class="text-right">
+        <p class="text-xs text-muted">Strikes<span class="block text-[0.65rem]">One per Fail verdict, either test</span></p>
+        <p id="driverStrikes" class="font-cond text-4xl leading-none mt-1" style="font-weight:700; color: var(--signal);">0</p>
+      </div>
+    </div>
+    <dl class="mt-4 divide-y divide-rail">
+      <div class="metric">
+        <dt>Baseline RMSE<span>This driver's own pursuit-test reference</span></dt>
+        <dd id="driverBaseline" class="readout">not set</dd>
+      </div>
+      <div class="metric">
+        <dt>Pursuit tests<span>Pass / borderline / fail / void</span></dt>
+        <dd id="driverPursuitStats" class="readout">0 / 0 / 0 / 0</dd>
+      </div>
+      <div class="metric">
+        <dt>Reaction tests<span>Pass / borderline / fail / void</span></dt>
+        <dd id="driverReactionStats" class="readout">0 / 0 / 0 / 0</dd>
+      </div>
+    </dl>
+  </div>
+</div>
+
 <main class="mx-auto max-w-[1400px] px-5 py-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_400px]">
 
   <!-- ============ STAGE ============ -->
