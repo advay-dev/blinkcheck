@@ -825,8 +825,8 @@ const REACTION_CONFIG = {
   TARGET_MS:        2000,    // a target left untapped this long counts as a miss
   MARGIN_PCT:       [12, 88, 15, 85], // [minX, maxX, minY, maxY] safe spawn area, %
 
-  WARN_MEDIAN_MS:   450,     // median reaction time at/above this -> borderline
-  FAIL_MEDIAN_MS:   600,     // median reaction time at/above this -> fail
+  WARN_MEDIAN_MS:   600,     // median reaction time at/above this -> borderline
+  FAIL_MEDIAN_MS:   700,     // median reaction time at/above this -> fail
   MAX_MISSES:       1,       // more misses than this fails outright; a miss is a lapse
   MAX_FALSE_STARTS: 2        // more taps-on-nothing than this fails outright
 };
