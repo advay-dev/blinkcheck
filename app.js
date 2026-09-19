@@ -68,6 +68,14 @@ const CONFIG = {
   WARN_MULT:        1.2,    // RMSE ≥ 1.2 × baseline  → borderline
   FAIL_MULT:        1.3,    // RMSE ≥ 1.3 × baseline  → fail
 
+  // Ceiling on the RMSE actually SAVED as the baseline. Baseline-relative scoring means
+  // whoever sets the baseline controls the bar for every later run — a driver could
+  // otherwise give a deliberately bad first run and make every future bad run compare
+  // fine against it. Capping the saved value bounds how much that's worth doing: the run
+  // still gets accepted and the "suspect" warning still fires, but the number it leaves
+  // behind can't be inflated past this line.
+  BASELINE_RMSE_CAP: 1.25,
+
   // --- absolute fallback, used only when no baseline is stored ---
   // Fractions of the peak target speed w. Provisional; the baseline path is the real test.
   FAIL_RATIO:       0.95,
@@ -517,7 +525,8 @@ function loadBaseline() {
 }
 
 function saveBaseline(r) {
-  const b = { rmse: r.rmse, gain: r.gain, lagMs: r.lagMs, recorded: new Date().toISOString() };
+  const rmse = Math.min(r.rmse, CONFIG.BASELINE_RMSE_CAP);
+  const b = { rmse, gain: r.gain, lagMs: r.lagMs, recorded: new Date().toISOString() };
   try { localStorage.setItem(CONFIG.BASELINE_KEY, JSON.stringify(b)); } catch { /* private mode */ }
   return b;
 }
@@ -662,8 +671,9 @@ function finishTest() {
     // Absolute thresholds survive only as a sanity check on the baseline itself:
     // a "rested" run this poor usually means bad tracking, not a bad driver.
     const suspect = r.rmse >= FAIL_RMSE || r.gain < 0.6 || r.lagMs > 400;
+    const capped = r.rmse > CONFIG.BASELINE_RMSE_CAP;
     setVerdict("void", "Baseline recorded",
-      `This run is now the reference for this device: RMSE ${b.rmse.toFixed(3)} /s, gain ${r.gain.toFixed(2)}, lag ${Math.round(r.lagMs)} ms. It only means anything if the driver was alert when it was taken.` +
+      `This run is now the reference for this device: RMSE ${b.rmse.toFixed(3)} /s${capped ? ` (capped from ${r.rmse.toFixed(3)})` : ""}, gain ${r.gain.toFixed(2)}, lag ${Math.round(r.lagMs)} ms. It only means anything if the driver was alert when it was taken.` +
       (suspect
         ? " These numbers look poor for a rested run — check lighting, glasses glare and head stillness, then reset the baseline and record it again."
         : " Retest later and the result is judged against this number."));
