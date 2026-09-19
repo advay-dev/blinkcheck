@@ -164,11 +164,9 @@
       <p id="verdictDetail" class="mt-2 text-sm text-muted">Run the test to get a reading.</p>
     </div>
 
-    <div class="rounded-xl border border-rail bg-panel">
-      <div class="border-b border-rail px-5 py-3">
-        <h2 class="font-cond text-xl" style="font-weight:600">Measurements</h2>
-      </div>
-      <dl class="divide-y divide-rail">
+    <details class="rounded-xl border border-rail bg-panel">
+      <summary class="px-5 py-3 font-cond text-xl cursor-pointer select-none" style="font-weight:600">Measurements</summary>
+      <dl class="divide-y divide-rail border-t border-rail">
         <div class="metric">
           <dt>Velocity error (RMSE)<span>Root-mean-square gap between eye and target speed</span></dt>
           <dd id="mRmse" class="readout">—</dd>
@@ -202,7 +200,7 @@
           <dd id="mValid" class="readout">—</dd>
         </div>
       </dl>
-    </div>
+    </details>
 
     <div class="rounded-xl border border-rail bg-panel p-5">
       <h2 class="font-cond text-xl" style="font-weight:600">How the test runs</h2>
@@ -273,11 +271,9 @@
         <p id="reactionVerdictDetail" class="mt-2 text-sm text-muted">Run the test to get a reading.</p>
       </div>
 
-      <div class="rounded-xl border border-rail bg-panel">
-        <div class="border-b border-rail px-5 py-3">
-          <h2 class="font-cond text-xl" style="font-weight:600">Measurements</h2>
-        </div>
-        <dl class="divide-y divide-rail">
+      <details class="rounded-xl border border-rail bg-panel">
+        <summary class="px-5 py-3 font-cond text-xl cursor-pointer select-none" style="font-weight:600">Measurements</summary>
+        <dl class="divide-y divide-rail border-t border-rail">
           <div class="metric">
             <dt>Median reaction time<span>Typical time from target appearing to tap. Fail at 700&nbsp;ms, borderline from 600&nbsp;ms</span></dt>
             <dd id="rMedian" class="readout">—</dd>
@@ -295,7 +291,7 @@
             <dd id="rFalse" class="readout">—</dd>
           </div>
         </dl>
-      </div>
+      </details>
 
       <p class="text-xs leading-relaxed text-muted">
         Provisional thresholds, same caveat as the pursuit test: not validated against a rested/fatigued
