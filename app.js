@@ -234,6 +234,14 @@ function showHeadWarning() {
   el.headWarning.querySelector(".head-warn-pill").style.animation = "none";
   el.headWarning.querySelector(".head-warn-pill").offsetWidth;
   el.headWarning.querySelector(".head-warn-pill").style.animation = "";
+  // Sustained head movement re-triggers this every qualifying camera frame (many times a
+  // second) — fine for the visual flash, but the alert tone needs its own cooldown or
+  // continuous movement sounds like an overlapping buzz storm instead of one clean cue.
+  const now = performance.now();
+  if (now - (state.lastHeadAlertAt || 0) > 1500) {
+    state.lastHeadAlertAt = now;
+    playHeadAlert();
+  }
   state.headWarnTimer = setTimeout(() => el.headWarning.classList.add("hidden"), 1600);
 }
 
@@ -1005,40 +1013,53 @@ function downloadReactionCsv() {
 
 /* ------------------------------------------------------------------ audio -- */
 /* Zero-dependency synthesized cues via the native Web Audio API — no MP3s, no assets
-   to fetch. The AudioContext is created lazily on first use, not at page load: browser
-   autoplay policy blocks audio until a user gesture, and by the time any of these fire
-   the driver has already clicked a start button, so this is never actually blocked in
-   practice. */
+   to fetch. The AudioContext is created lazily on first use, not at page load.
+   Everything in here is wrapped in try/catch and never throws outward: a chime fires
+   from inside a setTimeout callback, not directly inside a click handler, which is
+   exactly the call pattern strict autoplay-gesture policies (Safari especially) can
+   reject — an uncaught throw here previously broke the calling code entirely (a
+   target's armed/timeout state never got set up, a test never got scored), which is
+   a much worse failure than a missing sound effect. Audio is a nice-to-have; it must
+   never be able to break the actual test. */
 
 let audioCtx = null;
 function getAudioCtx() {
-  if (!("AudioContext" in window || "webkitAudioContext" in window)) return null;
-  if (!audioCtx) {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    audioCtx = new Ctx();
+  try {
+    if (!("AudioContext" in window || "webkitAudioContext" in window)) return null;
+    if (!audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      audioCtx = new Ctx();
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+    return audioCtx;
+  } catch {
+    return null;
   }
-  if (audioCtx.state === "suspended") audioCtx.resume();
-  return audioCtx;
 }
 
 function playTone(freq, durationMs, type, gainPeak) {
-  const ctx = getAudioCtx();
-  if (!ctx) return;
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = type;
-  osc.frequency.value = freq;
-  gain.gain.setValueAtTime(0, ctx.currentTime);
-  gain.gain.linearRampToValueAtTime(gainPeak, ctx.currentTime + 0.005);
-  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + durationMs / 1000);
-  osc.connect(gain);
-  gain.connect(ctx.destination);
-  osc.start();
-  osc.stop(ctx.currentTime + durationMs / 1000 + 0.02);
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(gainPeak, ctx.currentTime + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + durationMs / 1000);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + durationMs / 1000 + 0.02);
+  } catch {
+    /* audio is a nice-to-have; never let it break the test */
+  }
 }
 
 const playTargetChime = () => playTone(1200, 80, "sine", 0.18);
 const playFalseStartBuzz = () => playTone(120, 180, "sawtooth", 0.12);
+const playHeadAlert = () => playTone(300, 220, "triangle", 0.16);
 function playCompletionBeep() {
   playTone(880, 90, "square", 0.15);
   setTimeout(() => playTone(880, 90, "square", 0.15), 150);
@@ -1099,12 +1120,12 @@ function spawnTarget() {
   el.rTarget.style.left = x + "%";
   el.rTarget.style.top  = y + "%";
   el.rTarget.classList.remove("hidden");
-  playTargetChime();
   reaction.shownAt = performance.now();
   reaction.shownX = x;
   reaction.shownY = y;
   reaction.armed = true;
   reaction.timeoutId = setTimeout(onTargetTimeout, REACTION_CONFIG.TARGET_MS);
+  playTargetChime(); // game state is already committed above; a side effect firing last can't break it
 }
 
 function onTargetTimeout() {
