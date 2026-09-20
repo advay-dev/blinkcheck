@@ -71,7 +71,8 @@
              class="mt-1 w-full rounded-lg bg-hull border border-rail px-3 py-2 text-sm text-ink focus:outline-none focus:border-amber" />
     </div>
     <button id="btnDriverSelect" class="btn btn-primary">Start / switch driver</button>
-    <p class="text-xs text-muted basis-full">Existing name selects that driver's profile; a new name creates one. Stored on this device only.</p>
+    <p class="text-xs text-muted basis-full">Enter the name your admin registered for you on the dashboard. Stored on this device only.</p>
+    <p id="driverSelectError" class="text-xs basis-full hidden" style="color: var(--signal);"></p>
   </div>
 
   <div id="driverProfile" class="mt-4 rounded-xl border border-rail bg-panel p-5 hidden">
@@ -164,7 +165,6 @@
       <button id="btnStart" class="btn btn-ghost" disabled>Start 15-second test</button>
       <button id="btnAbort" class="btn btn-ghost hidden">Stop test</button>
       <button id="btnCsv" class="btn btn-ghost" disabled>Download raw samples</button>
-      <button id="btnBaseline" class="btn btn-ghost" disabled>Reset baseline</button>
       <p id="hint" class="text-sm text-muted">Chrome or Edge, over HTTPS. The first run downloads a 7&nbsp;MB face model.</p>
     </div>
 

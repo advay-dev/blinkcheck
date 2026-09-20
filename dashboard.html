@@ -159,6 +159,21 @@
 
     <!-- ============ DRIVERS TAB ============ -->
     <div id="tabDrivers" class="hidden flex flex-col gap-3">
+      <div class="rounded-xl border border-rail bg-panel p-4">
+        <h2 class="font-cond text-lg" style="font-weight:600">Register a driver</h2>
+        <p class="text-xs text-muted mt-1">
+          The main site can only select a name already registered here — it can no longer
+          create one on the fly. Closes off the easiest way to dodge accumulated strikes or
+          an owed check-in: just typing a fresh name.
+        </p>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <input id="newDriverName" type="text" placeholder="e.g. Jane Doe" autocomplete="off"
+                 class="flex-1 min-w-[200px] rounded-lg bg-hull border border-rail px-3 py-2 text-sm text-ink focus:outline-none focus:border-amber" />
+          <button id="btnAddDriver" class="btn btn-primary">Add driver</button>
+        </div>
+        <p id="addDriverStatus" class="mt-2 text-xs hidden"></p>
+      </div>
+
       <div class="flex flex-wrap items-center justify-between gap-3">
         <span class="text-xs text-muted">All driver profiles on this device</span>
         <div class="flex items-center gap-3">

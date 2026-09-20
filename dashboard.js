@@ -33,6 +33,7 @@ const el = {
   thWarnMs: $("thWarnMs"), thFailMs: $("thFailMs"),
   btnSaveThresholds: $("btnSaveThresholds"), btnResetThresholds: $("btnResetThresholds"),
   statDrivers: $("statDrivers"), statTests: $("statTests"), statStrikes: $("statStrikes"),
+  newDriverName: $("newDriverName"), btnAddDriver: $("btnAddDriver"), addDriverStatus: $("addDriverStatus"),
   btnExport: $("btnExport"), btnLoadDemo: $("btnLoadDemo"),
   btnImportTrigger: $("btnImportTrigger"), importFile: $("importFile"), importStatus: $("importStatus"),
   driverList: $("driverList"), driverEmpty: $("driverEmpty"),
@@ -271,6 +272,50 @@ el.btnResetThresholds.addEventListener("click", () => {
 
 /* -------------------------------------------------------------- drivers -- */
 
+/** The only place a driver profile gets created now — the main site's own driver-select
+ *  box used to create one on any typed name, which meant a flagged driver (strikes, an
+ *  owed check-in) could just type a fresh name and start clean. Registering here instead
+ *  means the roster is something an admin controls, not something a driver can route
+ *  around. Same driver-object shape app.js used to build inline. */
+function createDriver(name) {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  const id = trimmed.toLowerCase();
+  const store = loadDrivers();
+  if (store.drivers[id]) return "exists";
+  store.drivers[id] = {
+    id, name: trimmed, created: new Date().toISOString(),
+    baseline: null, strikes: 0,
+    stats: { pursuit: { pass: 0, watch: 0, fail: 0, void: 0 }, reaction: { pass: 0, watch: 0, fail: 0, void: 0 } },
+    history: [],
+    pendingChanges: [],
+    rating: { sum: 0, count: 0 },
+    activeTrip: null,
+    trips: []
+  };
+  saveDrivers(store);
+  return store.drivers[id];
+}
+
+el.btnAddDriver.addEventListener("click", () => {
+  const name = el.newDriverName.value;
+  const result = createDriver(name);
+  el.addDriverStatus.classList.remove("hidden");
+  if (result === null) {
+    el.addDriverStatus.textContent = "Enter a name first.";
+    el.addDriverStatus.style.color = "var(--signal)";
+  } else if (result === "exists") {
+    el.addDriverStatus.textContent = "A driver with that name already exists.";
+    el.addDriverStatus.style.color = "var(--signal)";
+  } else {
+    el.addDriverStatus.textContent = `Added "${result.name}" — they can now select that name on the main site.`;
+    el.addDriverStatus.style.color = "var(--trace)";
+    el.newDriverName.value = "";
+    renderDrivers();
+  }
+});
+el.newDriverName.addEventListener("keydown", (e) => { if (e.key === "Enter") el.btnAddDriver.click(); });
+
 function renderDrivers() {
   const store = loadDrivers();
   const drivers = Object.values(store.drivers);
@@ -360,6 +405,7 @@ function renderDrivers() {
 
         <div class="mt-5 pt-4 border-t border-rail flex items-center gap-4">
           <button data-id="${d.id}" class="btnResetStrikes text-xs text-muted underline decoration-dotted hover:text-ink">Reset strikes</button>
+          <button data-id="${d.id}" class="btnResetBaseline text-xs text-muted underline decoration-dotted hover:text-ink">Reset baseline</button>
           <button data-id="${d.id}" class="btnDeleteDriver text-xs text-muted underline decoration-dotted hover:text-ink">Delete driver</button>
         </div>
       </div>
@@ -380,6 +426,24 @@ function renderDrivers() {
       const driver = store2.drivers[id];
       if (!driver || !confirm(`Reset strikes for "${driver.name}" to 0? Their baseline, stats and history stay.`)) return;
       driver.strikes = 0;
+      saveDrivers(store2);
+      renderDrivers();
+    });
+  });
+
+  el.driverList.querySelectorAll(".btnResetBaseline").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const id = btn.getAttribute("data-id");
+      const store2 = loadDrivers();
+      const driver = store2.drivers[id];
+      // Moved here from the driver's own page on purpose: letting a driver clear their own
+      // baseline whenever convenient meant they could always re-set it on a day they felt
+      // sharp, undermining "first run is the honest reference". Now it's an admin call.
+      if (!driver || !confirm(`Reset "${driver.name}"'s pursuit baseline? Their next scored pursuit run becomes the new reference.`)) return;
+      driver.baseline = null;
+      if (!driver.pendingChanges) driver.pendingChanges = [];
+      driver.pendingChanges.push({ field: "baseline_cleared", t: new Date().toISOString() });
       saveDrivers(store2);
       renderDrivers();
     });

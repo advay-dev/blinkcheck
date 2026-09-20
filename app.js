@@ -167,7 +167,7 @@ const el = {
   stageMsg: $("stageMsg"), stageTitle: $("stageTitle"), stageSub: $("stageSub"),
   phaseLabel: $("phaseLabel"), clock: $("clock"), progress: $("progress"),
   btnCamera: $("btnCamera"), btnStart: $("btnStart"), btnAbort: $("btnAbort"),
-  btnCsv: $("btnCsv"), btnBaseline: $("btnBaseline"), btnReactionCsv: $("btnReactionCsv"),
+  btnCsv: $("btnCsv"), btnReactionCsv: $("btnReactionCsv"),
   mBase: $("mBase"), mRatio: $("mRatio"), mRatioHint: $("mRatioHint"),
   hint: $("hint"), fps: $("fps"),
   verdict: $("verdict"), verdictText: $("verdictText"), verdictDetail: $("verdictDetail"),
@@ -184,7 +184,7 @@ const el = {
   btnReactionVoidRetry: $("btnReactionVoidRetry"),
   rMedian: $("rMedian"), rWorst: $("rWorst"), rMiss: $("rMiss"), rFalse: $("rFalse"), rMedianHint: $("rMedianHint"),
   // --- driver profiles ---
-  driverName: $("driverName"), btnDriverSelect: $("btnDriverSelect"),
+  driverName: $("driverName"), btnDriverSelect: $("btnDriverSelect"), driverSelectError: $("driverSelectError"),
   driverProfile: $("driverProfile"), driverProfileName: $("driverProfileName"),
   driverStrikes: $("driverStrikes"), driverBaseline: $("driverBaseline"),
   driverPursuitStats: $("driverPursuitStats"), driverReactionStats: $("driverReactionStats"),
@@ -639,10 +639,6 @@ function computeDriveStatus(driver) {
   return (pursuitVerdict === "pass" && reactionVerdict === "pass") ? "can_drive" : "not_applicable";
 }
 
-function emptyDriverStats() {
-  return { pass: 0, watch: 0, fail: 0, void: 0 };
-}
-
 function loadDrivers() {
   try {
     const raw = localStorage.getItem(DRIVERS_KEY);
@@ -660,27 +656,20 @@ function getActiveDriver() {
   return store.activeId ? (store.drivers[store.activeId] || null) : null;
 }
 
-/** Selects an existing driver by name, or creates one. Becomes the active driver. */
+/** Selects an existing driver by name. Deliberately does NOT create one — a driver typing
+ *  any name into this box used to instantly get a clean, strike-free profile, which is an
+ *  easy way to dodge accumulated strikes or a check-in owed. Registering a driver is now an
+ *  admin-only action on the dashboard (see dashboard.js's createDriver()). */
 function selectDriver(name) {
   const trimmed = name.trim();
   if (!trimmed) return null;
   const id = trimmed.toLowerCase();
   const store = loadDrivers();
-  if (!store.drivers[id]) {
-    store.drivers[id] = {
-      id, name: trimmed, created: new Date().toISOString(),
-      baseline: null, strikes: 0,
-      stats: { pursuit: emptyDriverStats(), reaction: emptyDriverStats() },
-      history: [],
-      pendingChanges: [], // delta log since the last "Check transferable size" — see downloadable-size UI
-      rating: { sum: 0, count: 0 }, // set by the dashboard, one rating per completed trip
-      activeTrip: null,  // { startedAt } while a trip is in progress, else null
-      trips: []          // { id, startedAt, endedAt, rating: null until the dashboard rates it }
-    };
-  }
+  const driver = store.drivers[id];
+  if (!driver) return null;
   store.activeId = id;
   saveDrivers(store);
-  return store.drivers[id];
+  return driver;
 }
 
 /** Records a scored (non-baseline-setting) result against the active driver.
@@ -758,18 +747,6 @@ function saveDriverBaseline(r) {
   driver.pendingChanges.push({ field: "baseline", t: driver.baseline.recorded, value: driver.baseline });
   saveDrivers(store);
   return driver.baseline;
-}
-
-function clearDriverBaseline() {
-  const store = loadDrivers();
-  const driver = store.activeId ? store.drivers[store.activeId] : null;
-  if (!driver) return;
-  driver.baseline = null;
-  if (!driver.pendingChanges) driver.pendingChanges = [];
-  driver.pendingChanges.push({ field: "baseline_cleared", t: new Date().toISOString() });
-  saveDrivers(store);
-  showDriverProfile();
-  setVerdict("void", "Baseline cleared", "The next scored run becomes this driver's new rested baseline. Record it while they're alert.");
 }
 
 /* ----------------------------------------------------------------- trips -- */
@@ -933,7 +910,6 @@ function showDriverProfile() {
   if (!driver) {
     el.driverProfile.classList.add("hidden");
     el.mBase.innerHTML = "not set";
-    el.btnBaseline.disabled = true;
     return;
   }
   el.driverProfile.classList.remove("hidden");
@@ -944,7 +920,6 @@ function showDriverProfile() {
   const baselineText = driver.baseline ? driver.baseline.rmse.toFixed(3) + '<small> /s</small>' : "not set";
   el.driverBaseline.innerHTML = baselineText;
   el.mBase.innerHTML = baselineText;
-  el.btnBaseline.disabled = !driver.baseline;
   const p = driver.stats.pursuit, r = driver.stats.reaction;
   el.driverPursuitStats.textContent = `${p.pass} / ${p.watch} / ${p.fail} / ${p.void}`;
   el.driverReactionStats.textContent = `${r.pass} / ${r.watch} / ${r.fail} / ${r.void}`;
@@ -1695,11 +1670,18 @@ el.btnStart.addEventListener("click", () => {
 el.btnAbort.addEventListener("click", () => abortTest());
 el.btnCsv.addEventListener("click", downloadCsv);
 el.btnReactionCsv.addEventListener("click", downloadReactionCsv);
-el.btnBaseline.addEventListener("click", clearDriverBaseline);
 
 el.btnDriverSelect.addEventListener("click", () => {
-  const driver = selectDriver(el.driverName.value);
-  if (!driver) return;
+  const name = el.driverName.value.trim();
+  const driver = selectDriver(name);
+  if (!driver) {
+    el.driverSelectError.textContent = name
+      ? `No driver named "${name}" — ask your admin to add you on the dashboard.`
+      : "";
+    el.driverSelectError.classList.toggle("hidden", !name);
+    return;
+  }
+  el.driverSelectError.classList.add("hidden");
   el.driverName.value = "";
   showDriverProfile();
   updateStartGating();

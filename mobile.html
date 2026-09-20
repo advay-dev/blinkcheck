@@ -74,7 +74,8 @@
       <input id="driverName" type="text" placeholder="e.g. Jane Doe" autocomplete="off"
              class="w-full rounded-lg bg-hull border border-rail px-3 py-2 text-sm text-ink focus:outline-none focus:border-amber" />
       <button id="btnDriverSelect" class="btn btn-primary w-full">Start / switch driver</button>
-      <p class="text-xs text-muted">Existing name selects that profile; a new name creates one. Stored on this device only.</p>
+      <p class="text-xs text-muted">Enter the name your admin registered for you on the dashboard. Stored on this device only.</p>
+      <p id="driverSelectError" class="text-xs hidden" style="color: var(--signal);"></p>
     </div>
 
     <div id="driverProfile" class="rounded-xl border border-rail bg-panel p-4 hidden">
@@ -164,10 +165,7 @@
       <button id="btnCamera" class="btn btn-primary w-full">Turn on camera</button>
       <button id="btnStart" class="btn btn-ghost w-full" disabled>Start 15-second test</button>
       <button id="btnAbort" class="btn btn-ghost w-full hidden">Stop test</button>
-      <div class="grid grid-cols-2 gap-2">
-        <button id="btnCsv" class="btn btn-ghost" disabled>Raw samples</button>
-        <button id="btnBaseline" class="btn btn-ghost" disabled>Reset baseline</button>
-      </div>
+      <button id="btnCsv" class="btn btn-ghost w-full" disabled>Raw samples</button>
       <p id="hint" class="text-xs text-muted">Chrome or Safari, over HTTPS (or localhost). The first run downloads a 7&nbsp;MB face model.</p>
     </div>
 
