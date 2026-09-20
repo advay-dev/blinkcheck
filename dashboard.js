@@ -7,7 +7,7 @@
    visible in this file to anyone who opens dev tools; it only stops casual
    stumbling onto this page, which isn't linked from the main site. */
 
-const PASSPHRASE = "blinkcheck-admin"; // change this; still not real security — see note above
+const PASSPHRASE = "admin"; // change this; still not real security — see note above
 const UNLOCK_KEY = "blinkcheck.dashboard.unlocked";
 
 // Must match the keys app.js uses.
