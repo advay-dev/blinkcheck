@@ -26,6 +26,27 @@ body { font-synthesis-weight: none; }
    separately, via CAMERA_X_FLIP. */
 .mirrored { transform: scaleX(-1); }
 
+/* ---------- anti-cheat pill ---------- */
+/* Shown live, transiently, only when the real head-movement detector actually fires
+   (see HEAD_MOVE_LIMIT in app.js) — this reflects genuine mid-test detection, not a
+   scripted demo prop. */
+.head-warn-pill {
+  display: inline-block;
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  background: var(--amber);
+  color: #15202B;
+  font-family: "Barlow Condensed", Barlow, sans-serif;
+  font-weight: 600;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  animation: head-warn-flash 0.5s ease-in-out 3;
+}
+@keyframes head-warn-flash {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+
 /* ---------- stimulus ---------- */
 .dot {
   position: absolute;
@@ -112,6 +133,22 @@ body { font-synthesis-weight: none; }
 .verdict-watch #verdictText, .verdict-watch #reactionVerdictText { color: var(--amber); }
 .verdict-fail  #verdictText, .verdict-fail  #reactionVerdictText { color: var(--signal); }
 .verdict-void  #verdictText, .verdict-void  #reactionVerdictText { color: var(--muted); }
+
+/* Genuine void due to unusable data (dark cabin, poor tracking, head movement) — a distinct,
+   deliberately loud state from the quiet "void" used for in-progress/informational messages
+   above (Running, Baseline recorded). This one means "we could not measure you", which is
+   safety-relevant and should not read as a neutral gray note. */
+#verdict.verdict-voidwarn, #reactionVerdict.verdict-voidwarn {
+  border-color: var(--amber);
+  background: rgba(255, 176, 32, 0.1);
+  animation: void-pulse 1.6s ease-in-out infinite;
+}
+.verdict-voidwarn #verdictText, .verdict-voidwarn #reactionVerdictText { color: var(--amber); }
+
+@keyframes void-pulse {
+  0%, 100% { border-color: var(--amber); }
+  50%      { border-color: rgba(255, 176, 32, 0.35); }
+}
 
 /* ---------- buttons ---------- */
 .btn {

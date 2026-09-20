@@ -120,6 +120,15 @@ if (IS_MOBILE) {
   CONFIG.MIN_CORR = 0.4;
 }
 
+// Fast demo mode: ?demo=true shortens both tests for a stage pitch, nothing else changes —
+// same scoring logic, same gates, just less time spent per run. Explicit URL flag only, so
+// it can never accidentally affect a real test.
+const DEMO_MODE = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("demo") === "true";
+if (DEMO_MODE) {
+  CONFIG.CALIBRATION_S = 2;
+  CONFIG.TEST_S = 4;
+}
+
 // Dashboard-configurable score thresholds (dashboard.html's "Score thresholds" panel).
 // Read once at load; a change made in the dashboard takes effect on this page's next
 // load, not live mid-session. Falls back to the CONFIG/REACTION_CONFIG defaults above
@@ -154,14 +163,15 @@ const LM = {
 
 const $ = (id) => document.getElementById(id);
 const el = {
-  video: $("webcam"), overlay: $("overlay"), dot: $("dot"), stage: $("stage"),
+  video: $("webcam"), overlay: $("overlay"), dot: $("dot"), stage: $("stage"), headWarning: $("headWarning"),
   stageMsg: $("stageMsg"), stageTitle: $("stageTitle"), stageSub: $("stageSub"),
   phaseLabel: $("phaseLabel"), clock: $("clock"), progress: $("progress"),
   btnCamera: $("btnCamera"), btnStart: $("btnStart"), btnAbort: $("btnAbort"),
-  btnCsv: $("btnCsv"), btnBaseline: $("btnBaseline"),
+  btnCsv: $("btnCsv"), btnBaseline: $("btnBaseline"), btnReactionCsv: $("btnReactionCsv"),
   mBase: $("mBase"), mRatio: $("mRatio"), mRatioHint: $("mRatioHint"),
   hint: $("hint"), fps: $("fps"),
   verdict: $("verdict"), verdictText: $("verdictText"), verdictDetail: $("verdictDetail"),
+  btnVoidRetry: $("btnVoidRetry"),
   mRmse: $("mRmse"), mGain: $("mGain"), mLag: $("mLag"),
   mSacc: $("mSacc"), mBlink: $("mBlink"), mValid: $("mValid"),
   cfgFreq: $("cfgFreq"), cfgPeak: $("cfgPeak"),
@@ -171,13 +181,15 @@ const el = {
   rRoundLabel: $("reactionRoundLabel"), rClock: $("reactionClock"), rProgress: $("reactionProgress"),
   btnReactionStart: $("btnReactionStart"), btnReactionAbort: $("btnReactionAbort"),
   rVerdict: $("reactionVerdict"), rVerdictText: $("reactionVerdictText"), rVerdictDetail: $("reactionVerdictDetail"),
+  btnReactionVoidRetry: $("btnReactionVoidRetry"),
   rMedian: $("rMedian"), rWorst: $("rWorst"), rMiss: $("rMiss"), rFalse: $("rFalse"), rMedianHint: $("rMedianHint"),
   // --- driver profiles ---
   driverName: $("driverName"), btnDriverSelect: $("btnDriverSelect"),
   driverProfile: $("driverProfile"), driverProfileName: $("driverProfileName"),
   driverStrikes: $("driverStrikes"), driverBaseline: $("driverBaseline"),
   driverPursuitStats: $("driverPursuitStats"), driverReactionStats: $("driverReactionStats"),
-  btnNotify: $("btnNotify")
+  btnNotify: $("btnNotify"),
+  btnCheckBytes: $("btnCheckBytes"), bytesOutput: $("bytesOutput")
 };
 const ctx2d = el.overlay.getContext("2d");
 
@@ -209,9 +221,21 @@ const state = {
   lastSaccadeT: -1,
   blinks: 0, blinkOpen: true,
   prevHeadCenter: null, prevHeadT: null,
+  headWarnTimer: null,
   fpsFrames: 0, fpsT0: 0,
   lastChartT: 0
 };
+
+/** Retriggerable transient pill, shown only when the real head-movement detector fires. */
+function showHeadWarning() {
+  clearTimeout(state.headWarnTimer);
+  el.headWarning.classList.remove("hidden");
+  void el.headWarning.offsetWidth; // restart the CSS animation if it's already mid-flash
+  el.headWarning.querySelector(".head-warn-pill").style.animation = "none";
+  el.headWarning.querySelector(".head-warn-pill").offsetWidth;
+  el.headWarning.querySelector(".head-warn-pill").style.animation = "";
+  state.headWarnTimer = setTimeout(() => el.headWarning.classList.add("hidden"), 1600);
+}
 
 /* ------------------------------------------------------------ math utils -- */
 
@@ -462,6 +486,7 @@ function processSample(t, nowMs, info) {
         state.prevHeadCenter = headNow;
         state.prevHeadT = t;
         state.blankUntil = nowMs + CONFIG.HEAD_BLANK_MS;
+        showHeadWarning();
         pushSample(t, aPos, aVel, null, null, null, false, "headmove");
         return;
       }
@@ -724,6 +749,8 @@ function startTest() {
   state.emaGaze = null; state.emaHead = null; state.blankUntil = 0; state.lastSaccadeT = -1;
   state.saccades = 0; state.blinks = 0; state.blinkOpen = true;
   state.prevHeadCenter = null; state.prevHeadT = null;
+  clearTimeout(state.headWarnTimer);
+  el.headWarning.classList.add("hidden");
   resetChart();
   setMetrics(null);
   setVerdict("void", "Running", "Follow the dot. Keep your head still.");
@@ -760,6 +787,7 @@ function finishTest() {
   el.btnCsv.disabled = false;
   el.phaseLabel.textContent = "3 · Scored";
   el.progress.style.width = "100%";
+  playCompletionBeep();
 
   const r = scoreRun();
   setMetrics(r);
@@ -768,8 +796,8 @@ function finishTest() {
 
   if (r.void) {
     if (driver) recordResult("pursuit", "void", { validFrac: r.validFrac });
-    setVerdict("void", "Void",
-      "Not enough usable eye data to score this run. Brighten the room, remove glare from glasses, sit closer, and keep your head still.");
+    setVerdict("voidwarn", "VOID",
+      "DATA INTEGRITY COMPROMISED — cabin too dark, glare, or poor tracking. Not a fail; this run doesn't count against the driver. Recalibrate and retry.");
     setStage("Void", "The run could not be scored. Try again with better lighting and a still head.");
     return;
   }
@@ -839,10 +867,11 @@ function updateClock(t) {
 }
 
 function setVerdict(kind, text, detail) {
-  el.verdict.classList.remove("verdict-pass", "verdict-watch", "verdict-fail", "verdict-void");
+  el.verdict.classList.remove("verdict-pass", "verdict-watch", "verdict-fail", "verdict-void", "verdict-voidwarn");
   el.verdict.classList.add("verdict-" + kind);
   el.verdictText.textContent = text;
   el.verdictDetail.textContent = detail;
+  el.btnVoidRetry.classList.toggle("hidden", kind !== "voidwarn");
 }
 
 function setMetrics(r) {
@@ -944,6 +973,77 @@ function downloadCsv() {
   URL.revokeObjectURL(url);
 }
 
+function downloadReactionCsv() {
+  const rows = [
+    ...reaction.results.map((r, i) => ({
+      t: r.t, event: r.rt !== null ? "hit" : "miss", round: i + 1,
+      x: r.x, y: r.y, latencyMs: r.rt
+    })),
+    ...reaction.falseStartLog.map((f) => ({
+      t: f.t, event: "false_start", round: "", x: f.x, y: f.y, latencyMs: null
+    }))
+  ].sort((a, b) => a.t - b.t);
+
+  const head = "t_s,event,round,x_pct,y_pct,latency_ms\n";
+  const body = rows.map((r) => [
+    r.t.toFixed(4),
+    r.event,
+    r.round,
+    r.x.toFixed(2),
+    r.y.toFixed(2),
+    r.latencyMs === null ? "" : r.latencyMs.toFixed(1)
+  ].join(",")).join("\n");
+
+  const blob = new Blob([head + body], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `blinkcheck-reaction-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ------------------------------------------------------------------ audio -- */
+/* Zero-dependency synthesized cues via the native Web Audio API — no MP3s, no assets
+   to fetch. The AudioContext is created lazily on first use, not at page load: browser
+   autoplay policy blocks audio until a user gesture, and by the time any of these fire
+   the driver has already clicked a start button, so this is never actually blocked in
+   practice. */
+
+let audioCtx = null;
+function getAudioCtx() {
+  if (!("AudioContext" in window || "webkitAudioContext" in window)) return null;
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new Ctx();
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+
+function playTone(freq, durationMs, type, gainPeak) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(gainPeak, ctx.currentTime + 0.005);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + durationMs / 1000);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + durationMs / 1000 + 0.02);
+}
+
+const playTargetChime = () => playTone(1200, 80, "sine", 0.18);
+const playFalseStartBuzz = () => playTone(120, 180, "sawtooth", 0.12);
+function playCompletionBeep() {
+  playTone(880, 90, "square", 0.15);
+  setTimeout(() => playTone(880, 90, "square", 0.15), 150);
+}
+
 /* ============================================================================
    Reaction test — a second, independent screen. Ten targets appear one at a
    time, at a random position and after a random delay; tap each the instant
@@ -971,15 +1071,19 @@ const REACTION_CONFIG = {
 // Same dashboard-configurable overrides as CONFIG above (see loadThresholdOverrides()).
 if (isFinite(thresholdOverrides.reactionWarnMs)) REACTION_CONFIG.WARN_MEDIAN_MS = thresholdOverrides.reactionWarnMs;
 if (isFinite(thresholdOverrides.reactionFailMs)) REACTION_CONFIG.FAIL_MEDIAN_MS = thresholdOverrides.reactionFailMs;
+if (DEMO_MODE) REACTION_CONFIG.ROUNDS = 4;
 el.rMedianHint.textContent = `Fail at ${REACTION_CONFIG.FAIL_MEDIAN_MS} ms, borderline from ${REACTION_CONFIG.WARN_MEDIAN_MS} ms`;
 
 const reaction = {
   phase: "idle",   // idle | running | done
   round: 0,
-  results: [],     // {rt: ms} for a hit, {rt: null} for a timeout miss
+  results: [],     // {rt, x, y} for a hit, {rt: null, x, y} for a timeout miss — x/y in stage %
   falseStarts: 0,
+  falseStartLog: [], // {t, x, y} — t is seconds since test start, x/y the tap position in stage %
   armed: false,
   shownAt: 0,
+  shownX: 0, shownY: 0,
+  t0: 0,
   spawnTimer: null,
   timeoutId: null
 };
@@ -990,10 +1094,15 @@ function reactionDelay() {
 
 function spawnTarget() {
   const [minX, maxX, minY, maxY] = REACTION_CONFIG.MARGIN_PCT;
-  el.rTarget.style.left = (minX + Math.random() * (maxX - minX)) + "%";
-  el.rTarget.style.top  = (minY + Math.random() * (maxY - minY)) + "%";
+  const x = minX + Math.random() * (maxX - minX);
+  const y = minY + Math.random() * (maxY - minY);
+  el.rTarget.style.left = x + "%";
+  el.rTarget.style.top  = y + "%";
   el.rTarget.classList.remove("hidden");
+  playTargetChime();
   reaction.shownAt = performance.now();
+  reaction.shownX = x;
+  reaction.shownY = y;
   reaction.armed = true;
   reaction.timeoutId = setTimeout(onTargetTimeout, REACTION_CONFIG.TARGET_MS);
 }
@@ -1001,7 +1110,7 @@ function spawnTarget() {
 function onTargetTimeout() {
   reaction.armed = false;
   el.rTarget.classList.add("hidden");
-  reaction.results.push({ rt: null });
+  reaction.results.push({ rt: null, x: reaction.shownX, y: reaction.shownY, t: (performance.now() - reaction.t0) / 1000 });
   advanceReactionRound();
 }
 
@@ -1011,7 +1120,7 @@ function onTargetTap() {
   clearTimeout(reaction.timeoutId);
   reaction.armed = false;
   el.rTarget.classList.add("hidden");
-  reaction.results.push({ rt });
+  reaction.results.push({ rt, x: reaction.shownX, y: reaction.shownY, t: (performance.now() - reaction.t0) / 1000 });
   advanceReactionRound();
 }
 
@@ -1034,12 +1143,15 @@ function startReaction() {
   reaction.round = 0;
   reaction.results = [];
   reaction.falseStarts = 0;
+  reaction.falseStartLog = [];
+  reaction.t0 = performance.now();
   reaction.armed = false;
   el.rTarget.classList.add("hidden");
   el.rMsg.classList.add("hidden");
   el.rRoundLabel.textContent = "Running";
   el.btnReactionStart.disabled = true;
   el.btnReactionAbort.classList.remove("hidden");
+  el.btnReactionCsv.disabled = true;
   updateDriverLock();
   setReactionMetrics(null);
   setReactionVerdict("void", "Running", "Tap each target the instant it appears.");
@@ -1068,8 +1180,10 @@ function finishReaction() {
   updateDriverLock();
   el.btnReactionStart.textContent = "Run the test again";
   el.btnReactionAbort.classList.add("hidden");
+  el.btnReactionCsv.disabled = false;
   el.rRoundLabel.textContent = "Scored";
   el.rProgress.style.width = "100%";
+  playCompletionBeep();
 
   const r = scoreReaction();
   setReactionMetrics(r);
@@ -1077,7 +1191,8 @@ function finishReaction() {
 
   if (r.void) {
     if (driver) recordResult("reaction", "void", {});
-    setReactionVerdict("void", "Void", "No valid taps recorded. Try again and tap the target as soon as it appears.");
+    setReactionVerdict("voidwarn", "VOID",
+      "DATA INTEGRITY COMPROMISED — no valid taps recorded. Not a fail; this run doesn't count against the driver. Retry.");
     setReactionStage("Void", "The run could not be scored.");
     return;
   }
@@ -1121,10 +1236,11 @@ function setReactionStage(title, sub) {
 }
 
 function setReactionVerdict(kind, text, detail) {
-  el.rVerdict.classList.remove("verdict-pass", "verdict-watch", "verdict-fail", "verdict-void");
+  el.rVerdict.classList.remove("verdict-pass", "verdict-watch", "verdict-fail", "verdict-void", "verdict-voidwarn");
   el.rVerdict.classList.add("verdict-" + kind);
   el.rVerdictText.textContent = text;
   el.rVerdictDetail.textContent = detail;
+  el.btnReactionVoidRetry.classList.toggle("hidden", kind !== "voidwarn");
 }
 
 function setReactionMetrics(r) {
@@ -1220,6 +1336,7 @@ el.btnStart.addEventListener("click", () => {
 });
 el.btnAbort.addEventListener("click", () => abortTest());
 el.btnCsv.addEventListener("click", downloadCsv);
+el.btnReactionCsv.addEventListener("click", downloadReactionCsv);
 el.btnBaseline.addEventListener("click", clearDriverBaseline);
 
 el.btnDriverSelect.addEventListener("click", () => {
@@ -1242,6 +1359,19 @@ el.btnNotify.addEventListener("click", toggleReminders);
 updateNotifyUI();
 if ("Notification" in window) setInterval(checkNotifyDue, NOTIFY_CHECK_MS);
 
+// Real measurement of the active driver's actual stored record size, as a concrete stand-in
+// for "how much would a future backend sync need to send" — nothing here is transmitted.
+el.btnCheckBytes.addEventListener("click", () => {
+  const driver = getActiveDriver();
+  if (!driver) {
+    el.bytesOutput.textContent = "No active driver selected.";
+    return;
+  }
+  const json = JSON.stringify(driver);
+  const bytes = new Blob([json]).size;
+  el.bytesOutput.textContent = `${driver.name}'s full profile: ${bytes.toLocaleString()} bytes.`;
+});
+
 el.btnReactionStart.addEventListener("click", () => {
   if (reaction.phase === "idle" || reaction.phase === "done") startReaction();
 });
@@ -1252,6 +1382,13 @@ el.rStage.addEventListener("click", (e) => {
     onTargetTap();
   } else if (!reaction.armed) {
     reaction.falseStarts++;
+    playFalseStartBuzz();
+    const rect = el.rStage.getBoundingClientRect();
+    reaction.falseStartLog.push({
+      t: (performance.now() - reaction.t0) / 1000,
+      x: ((e.clientX - rect.left) / rect.width) * 100,
+      y: ((e.clientY - rect.top) / rect.height) * 100
+    });
   }
 });
 

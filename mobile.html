@@ -117,6 +117,11 @@
       <!-- the stimulus -->
       <div id="dot" class="dot hidden"></div>
 
+      <!-- transient anti-cheat pill: shown live when the head-movement detector actually fires -->
+      <div id="headWarning" class="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 hidden z-10">
+        <span class="head-warn-pill">⚠️ KEEP HEAD STILL</span>
+      </div>
+
       <!-- phase banner -->
       <div id="stageMsg" class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/55 px-5 text-center">
         <p id="stageTitle" class="font-cond text-3xl leading-none" style="font-weight:600">Camera is off</p>
@@ -151,6 +156,7 @@
       <p class="text-xs text-muted">Result</p>
       <p id="verdictText" class="font-cond text-4xl leading-none mt-1" style="font-weight:700">No test yet</p>
       <p id="verdictDetail" class="mt-2 text-sm text-muted">Run the test to get a reading.</p>
+      <button id="btnVoidRetry" class="btn btn-primary w-full mt-4 hidden">Recalibrate &amp; Retry</button>
     </div>
 
     <details class="rounded-xl border border-rail bg-panel">
@@ -217,6 +223,16 @@
       condition, and its thresholds are provisional defaults that have not been validated against a clinical reference.
       Do not use it to clear or ground a driver.
     </p>
+
+    <div class="rounded-xl border border-rail bg-panel p-4">
+      <button id="btnCheckBytes" class="text-xs text-muted underline decoration-dotted">Check payload size</button>
+      <p class="text-xs text-muted mt-2 leading-relaxed">
+        Nothing here is transmitted — everything stays on this device. This just measures how
+        small the active driver's full record actually is, as a stand-in for what a future
+        backend sync would need to send.
+      </p>
+      <p id="bytesOutput" class="readout text-sm mt-2"></p>
+    </div>
   </section>
 
   <!-- ============ REACTION TEST ============ -->
@@ -251,6 +267,7 @@
     <div class="flex flex-col gap-2">
       <button id="btnReactionStart" class="btn btn-primary w-full">Start reaction test</button>
       <button id="btnReactionAbort" class="btn btn-ghost w-full hidden">Stop test</button>
+      <button id="btnReactionCsv" class="btn btn-ghost w-full" disabled>Download raw samples</button>
       <p class="text-xs text-muted">Tap with your finger — no mouse needed.</p>
     </div>
 

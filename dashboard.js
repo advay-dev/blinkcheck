@@ -29,7 +29,8 @@ const el = {
   thWarnMs: $("thWarnMs"), thFailMs: $("thFailMs"),
   btnSaveThresholds: $("btnSaveThresholds"), btnResetThresholds: $("btnResetThresholds"),
   statDrivers: $("statDrivers"), statTests: $("statTests"), statStrikes: $("statStrikes"),
-  btnExport: $("btnExport"),
+  btnExport: $("btnExport"), btnLoadDemo: $("btnLoadDemo"),
+  btnImportTrigger: $("btnImportTrigger"), importFile: $("importFile"), importStatus: $("importStatus"),
   driverList: $("driverList"), driverEmpty: $("driverEmpty"),
   tabBtnSettings: $("tabBtnSettings"), tabBtnDrivers: $("tabBtnDrivers"),
   tabSettings: $("tabSettings"), tabDrivers: $("tabDrivers")
@@ -269,6 +270,109 @@ el.btnExport.addEventListener("click", () => {
   a.download = `blinkcheck-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
   a.click();
   URL.revokeObjectURL(url);
+});
+
+/* ------------------------------------------------------------- demo fleet -- */
+/* For a stage pitch: three realistic-looking profiles spanning the verdict range, so a demo
+   doesn't depend on someone having actually driven real test runs beforehand. Fabricated
+   demo data, clearly presented as such (button says "demo") — additive, not destructive: it
+   merges into whatever's already in the repository rather than wiping real profiles, though a
+   real driver who happens to share one of these exact names would get overwritten. */
+
+function demoDriver(name, { rmse, gain, lagMs, strikes, pursuit, reaction, history }) {
+  const now = Date.now();
+  return {
+    id: name.trim().toLowerCase(),
+    name,
+    created: new Date(now - 6 * 86400000).toISOString(),
+    baseline: { rmse, gain, lagMs, recorded: new Date(now - 6 * 86400000).toISOString() },
+    strikes,
+    stats: { pursuit, reaction },
+    history: history.map((h, i) => ({
+      t: new Date(now - (history.length - i) * 3600000).toISOString(),
+      test: h.test, verdict: h.verdict, detail: {}
+    }))
+  };
+}
+
+const DEMO_FLEET = [
+  demoDriver("Raju Kumar", {
+    rmse: 0.32, gain: 0.95, lagMs: 140, strikes: 0,
+    pursuit: { pass: 5, watch: 1, fail: 0, void: 0 },
+    reaction: { pass: 4, watch: 1, fail: 0, void: 0 },
+    history: [
+      { test: "pursuit", verdict: "pass" }, { test: "reaction", verdict: "pass" },
+      { test: "pursuit", verdict: "pass" }, { test: "reaction", verdict: "watch" },
+      { test: "pursuit", verdict: "pass" }, { test: "reaction", verdict: "pass" }
+    ]
+  }),
+  demoDriver("Vikram Singh", {
+    rmse: 0.55, gain: 0.82, lagMs: 210, strikes: 2,
+    pursuit: { pass: 2, watch: 3, fail: 1, void: 0 },
+    reaction: { pass: 1, watch: 2, fail: 1, void: 0 },
+    history: [
+      { test: "pursuit", verdict: "watch" }, { test: "reaction", verdict: "watch" },
+      { test: "pursuit", verdict: "fail" }, { test: "reaction", verdict: "pass" },
+      { test: "pursuit", verdict: "watch" }, { test: "reaction", verdict: "fail" }
+    ]
+  }),
+  demoDriver("Amit Sharma", {
+    rmse: 0.61, gain: 0.70, lagMs: 260, strikes: 3,
+    pursuit: { pass: 0, watch: 1, fail: 3, void: 1 },
+    reaction: { pass: 0, watch: 0, fail: 3, void: 0 },
+    history: [
+      { test: "pursuit", verdict: "fail" }, { test: "reaction", verdict: "fail" },
+      { test: "pursuit", verdict: "void" }, { test: "pursuit", verdict: "fail" },
+      { test: "reaction", verdict: "fail" }, { test: "pursuit", verdict: "watch" }
+    ]
+  })
+];
+
+el.btnLoadDemo.addEventListener("click", () => {
+  if (!confirm("Load 3 demo drivers (Raju Kumar, Vikram Singh, Amit Sharma)? This adds to the existing repository — it only overwrites a real profile if it happens to share one of those exact names.")) return;
+  const store = loadDrivers();
+  for (const d of DEMO_FLEET) store.drivers[d.id] = d;
+  saveDrivers(store);
+  renderDrivers();
+});
+
+/* ---------------------------------------------------------------- import -- */
+
+el.btnImportTrigger.addEventListener("click", () => el.importFile.click());
+
+el.importFile.addEventListener("change", () => {
+  const file = el.importFile.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    el.importFile.value = "";
+    let parsed;
+    try {
+      parsed = JSON.parse(reader.result);
+    } catch {
+      el.importStatus.textContent = "That file isn't valid JSON.";
+      el.importStatus.style.color = "var(--signal)";
+      el.importStatus.classList.remove("hidden");
+      return;
+    }
+    if (!parsed.drivers || typeof parsed.drivers.drivers !== "object") {
+      el.importStatus.textContent = "Doesn't look like a BlinkCheck backup file (missing drivers.drivers).";
+      el.importStatus.style.color = "var(--signal)";
+      el.importStatus.classList.remove("hidden");
+      return;
+    }
+    const store = loadDrivers();
+    const importedCount = Object.keys(parsed.drivers.drivers).length;
+    for (const [id, driver] of Object.entries(parsed.drivers.drivers)) store.drivers[id] = driver;
+    saveDrivers(store);
+    if (parsed.notify && typeof parsed.notify === "object") saveNotifySettings(parsed.notify);
+    if (parsed.thresholds && typeof parsed.thresholds === "object") saveThresholds(parsed.thresholds);
+    el.importStatus.textContent = `Imported ${importedCount} driver${importedCount === 1 ? "" : "s"}.`;
+    el.importStatus.style.color = "var(--trace)";
+    el.importStatus.classList.remove("hidden");
+    refreshAll();
+  };
+  reader.readAsText(file);
 });
 
 function escapeHtml(s) {
