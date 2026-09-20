@@ -276,3 +276,24 @@ function escapeHtml(s) {
   div.textContent = s;
   return div.innerHTML;
 }
+
+/* ------------------------------------------------------------- live sync -- */
+/* The dashboard only reads localStorage when it loads, so a driver created in
+   another tab afterward wouldn't show up until a manual reload. The storage
+   event fires automatically in every OTHER open tab of the same browser/origin
+   the instant one tab writes to localStorage (never in the tab that wrote it,
+   by design) - same-browser, same-origin only, this doesn't reach a different
+   browser or device. Focus/visibility listeners are a fallback in case a
+   storage event gets missed (some browsers throttle it in a backgrounded tab). */
+
+function refreshAll() {
+  renderNotifySettings();
+  renderThresholds();
+  renderDrivers();
+}
+
+window.addEventListener("storage", (e) => {
+  if (e.key === DRIVERS_KEY || e.key === NOTIFY_KEY || e.key === THRESHOLDS_KEY || e.key === null) refreshAll();
+});
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshAll(); });
+window.addEventListener("focus", refreshAll);
