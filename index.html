@@ -106,7 +106,17 @@
     <div class="mt-4 pt-4 border-t border-rail flex flex-wrap items-center gap-3">
       <button id="btnStartTrip" class="btn btn-primary">Start trip</button>
       <button id="btnEndTrip" class="btn btn-ghost hidden">End trip</button>
+      <button id="btnMarkStopped" class="btn btn-ghost hidden">I've stopped</button>
       <p id="tripStatus" class="text-xs text-muted"></p>
+    </div>
+    <div id="stopReasonRow" class="mt-3 hidden flex flex-wrap items-center gap-2">
+      <label for="stopReasonSelect" class="text-xs text-muted">Reason</label>
+      <select id="stopReasonSelect" class="rounded-lg bg-hull border border-rail px-3 py-2 text-sm text-ink focus:outline-none focus:border-amber">
+        <option value="meal">Meal</option>
+        <option value="washroom">Washroom</option>
+        <option value="other">Other</option>
+      </select>
+      <button id="btnConfirmStop" class="btn btn-ghost">Confirm</button>
     </div>
   </div>
 </div>
@@ -356,15 +366,15 @@
 </div>
 
 <!-- ============ FATIGUE CHECK-IN PROMPT ============ -->
-<!-- Shown for the periodic reminder and for an admin-sent message alike. Never assumes the
-     driver can stop immediately — always offers a limited snooze alongside "do it now". -->
+<!-- Shown for the periodic reminder, an admin-sent message, or a logged stop alike. No
+     snooze — a driver can't always stop instantly, but the answer to that is "stop as soon
+     as it's safe", backed by a real consequence (a strike) if a trip ends still owing one. -->
 <div id="fatigueModal" style="display:none;" class="fixed inset-0 z-50 items-center justify-center bg-black/70 px-5">
   <div class="max-w-sm w-full rounded-xl border border-rail bg-panel p-6 text-center">
     <p class="text-xs text-muted">Fatigue check-in</p>
     <p id="fatigueMsg" class="mt-2 font-cond text-2xl leading-snug" style="font-weight:700">Time for a quick fatigue check-in.</p>
-    <p id="fatigueSnoozeHint" class="mt-2 text-xs text-muted"></p>
+    <p id="fatigueSnoozeHint" class="mt-2 text-xs" style="color: var(--amber);"></p>
     <div class="mt-5 flex justify-center gap-3">
-      <button id="btnFatigueSnooze" class="btn btn-ghost">Snooze 15 minutes</button>
       <button id="btnFatigueNow" class="btn btn-primary">Do the checks now</button>
     </div>
   </div>

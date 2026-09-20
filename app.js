@@ -190,11 +190,13 @@ const el = {
   driverPursuitStats: $("driverPursuitStats"), driverReactionStats: $("driverReactionStats"),
   driverRating: $("driverRating"),
   btnStartTrip: $("btnStartTrip"), btnEndTrip: $("btnEndTrip"), tripStatus: $("tripStatus"),
+  btnMarkStopped: $("btnMarkStopped"), stopReasonRow: $("stopReasonRow"),
+  stopReasonSelect: $("stopReasonSelect"), btnConfirmStop: $("btnConfirmStop"),
   readinessModal: $("readinessModal"), readinessIcon: $("readinessIcon"),
   readinessTitle: $("readinessTitle"), readinessDetail: $("readinessDetail"),
   btnReadinessRetry: $("btnReadinessRetry"), btnReadinessClose: $("btnReadinessClose"),
   fatigueModal: $("fatigueModal"), fatigueMsg: $("fatigueMsg"), fatigueSnoozeHint: $("fatigueSnoozeHint"),
-  btnFatigueNow: $("btnFatigueNow"), btnFatigueSnooze: $("btnFatigueSnooze"),
+  btnFatigueNow: $("btnFatigueNow"),
   btnNotify: $("btnNotify"),
   btnCheckBytes: $("btnCheckBytes"), bytesOutput: $("bytesOutput"),
   btnCheckDelta: $("btnCheckDelta"), deltaOutput: $("deltaOutput")
@@ -593,6 +595,10 @@ function closeCalibration() {
 const DRIVERS_KEY = "blinkcheck.drivers.v1";
 const DRIVER_HISTORY_CAP = 50; // per driver; oldest entries drop first
 const DRIVER_TRIP_CAP = 50;    // per driver; oldest trips drop first
+const MEAL_TEST_DEADLINE_MS = 30 * 60000;  // drowsiness onset lags a meal by roughly this long
+const SPEED_CHECK_INTERVAL_MS = 10 * 60000; // how often the active trip samples GPS speed
+const SPEED_STOPPED_THRESHOLD_MS = 2;       // ~7 km/h — below this counts as "stopped" for a sample
+const AUTO_STOP_LOOKAHEAD_MS = 60 * 60000;  // only auto-prompt on a natural stop if a reminder is due soon
 
 // A separate, lightweight event log the dashboard watches (via the same "storage" event
 // it already uses for live sync) to fire its own admin-facing notifications. Kept apart
@@ -701,12 +707,13 @@ function recordResult(testType, kind, detail) {
     pushDashboardEvent("completed_both", driver, { pursuitVerdict, reactionVerdict });
     // Completing both checks is the real resolution of a fatigue-check-in cycle — reset
     // it here rather than leaving that to a blind timer, so the next reminder is a full
-    // interval away again instead of nagging again a few minutes later.
+    // interval away again instead of nagging again a few minutes later. Also clears any
+    // check-in owed on the active trip, resolving it before it can cost a strike at endTrip().
     const notify = loadNotifySettings();
     notify.lastNotified = new Date().toISOString();
-    notify.snoozeCount = 0;
     notify.nextCheckAt = new Date(Date.now() + notify.intervalHours * 3600000).toISOString();
     saveNotifySettings(notify);
+    if (driver.activeTrip) driver.activeTrip.pendingCheckIn = null;
   }
 
   saveDrivers(store);
@@ -774,7 +781,12 @@ function startTrip() {
   const store = loadDrivers();
   const driver = store.activeId ? store.drivers[store.activeId] : null;
   if (!driver || driver.activeTrip) return;
-  driver.activeTrip = { startedAt: new Date().toISOString() };
+  driver.activeTrip = {
+    startedAt: new Date().toISOString(),
+    stoppedAt: null, stopReason: null,       // set by markStopped()
+    lastSpeedCheckAt: null, recentSpeeds: [], // last couple of 10-min GPS speed samples
+    pendingCheckIn: null                      // {reason, requestedAt, dueAt} while a check-in is owed
+  };
   if (!driver.pendingChanges) driver.pendingChanges = [];
   driver.pendingChanges.push({ field: "trip_started", t: driver.activeTrip.startedAt });
   saveDrivers(store);
@@ -785,12 +797,17 @@ function endTrip() {
   const store = loadDrivers();
   const driver = store.activeId ? store.drivers[store.activeId] : null;
   if (!driver || !driver.activeTrip) return;
+  // Ending the trip with an unresolved check-in owed is the actual enforcement point —
+  // there's no way to force a stop mid-trip, only a consequence at the end of it.
+  const strikeForNoncompliance = !!driver.activeTrip.pendingCheckIn;
   const trip = {
     id: `${driver.id}-${Date.now()}`,
     startedAt: driver.activeTrip.startedAt,
     endedAt: new Date().toISOString(),
-    rating: null
+    rating: null,
+    strikeForNoncompliance
   };
+  if (strikeForNoncompliance) driver.strikes++;
   if (!driver.trips) driver.trips = []; // older profiles predate this field
   driver.trips.push(trip);
   if (driver.trips.length > DRIVER_TRIP_CAP) driver.trips.shift();
@@ -798,7 +815,117 @@ function endTrip() {
   if (!driver.pendingChanges) driver.pendingChanges = [];
   driver.pendingChanges.push({ field: "trip_ended", t: trip.endedAt, value: trip });
   saveDrivers(store);
+  if (strikeForNoncompliance) {
+    pushDashboardEvent("trip_noncompliance_strike", driver, { tripId: trip.id });
+  }
   showDriverProfile();
+}
+
+/** Records that the driver has pulled over, with a reason. A meal specifically comes with
+ *  an announced 30-minute deadline (drowsiness onset lags a meal) — everything else just
+ *  opens a pending check-in immediately. Speed is a best-effort corroboration, never a hard
+ *  block: GPS can be noisy or unavailable, and the point is to nudge honesty, not police it. */
+function markStopped(reason) {
+  const store = loadDrivers();
+  const driver = store.activeId ? store.drivers[store.activeId] : null;
+  if (!driver || !driver.activeTrip) return;
+  driver.activeTrip.stoppedAt = new Date().toISOString();
+  driver.activeTrip.stopReason = reason;
+  saveDrivers(store);
+
+  verifyStoppedBySpeed(reason);
+
+  if (reason === "meal") {
+    openPendingCheckIn("meal", MEAL_TEST_DEADLINE_MS);
+    promptFatigueCheck("You've logged a meal stop. Complete both checks within 30 minutes — "
+      + "drowsiness often hits shortly after eating.");
+  } else {
+    openPendingCheckIn(reason, null);
+    promptFatigueCheck("Good time for a quick check-in while you're stopped.");
+  }
+  showDriverProfile();
+}
+
+function verifyStoppedBySpeed(reason) {
+  if (!("geolocation" in navigator)) return;
+  navigator.geolocation.getCurrentPosition((pos) => {
+    const speed = pos.coords.speed; // m/s, null if unavailable
+    if (speed !== null && speed > 2) { // ~7 km/h — clearly still moving
+      promptFatigueCheck(`Speed data suggests you might still be moving — if this "${reason}" `
+        + `stop wasn't accurate, no problem, just make sure the check-in still happens soon.`);
+    }
+  }, () => { /* permission denied or unavailable — corroboration is best-effort only */ });
+}
+
+/** Opens (or refreshes) the single outstanding check-in requirement for the active trip.
+ *  Only one at a time — a new due-reason doesn't stack, it just relabels the same
+ *  requirement, since only one strike can be earned per trip for this. */
+function openPendingCheckIn(reason, deadlineMs) {
+  const store = loadDrivers();
+  const driver = store.activeId ? store.drivers[store.activeId] : null;
+  if (!driver || !driver.activeTrip) return;
+  if (driver.activeTrip.pendingCheckIn) return; // already owed — don't reset its clock
+  const requestedAt = new Date();
+  driver.activeTrip.pendingCheckIn = {
+    reason,
+    requestedAt: requestedAt.toISOString(),
+    dueAt: deadlineMs ? new Date(requestedAt.getTime() + deadlineMs).toISOString() : null
+  };
+  saveDrivers(store);
+}
+
+function haversineMeters(a, b) {
+  const R = 6371000, toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+/** Samples GPS speed roughly every 10 minutes during an active trip. Uses elapsed
+ *  wall-clock time against a stored timestamp rather than a live long-running timer, so it
+ *  self-corrects the moment the tab wakes up even if the phone was locked/backgrounded for
+ *  the whole interval (a real risk here — a meal break easily means the screen is off for
+ *  30+ minutes). Ties into the reminder schedule: a natural stop only auto-prompts if a
+ *  check-in is coming due soon anyway, so it reads as "using a stop you're already taking",
+ *  not a random interruption. */
+function checkTripSpeed() {
+  const store = loadDrivers();
+  const driver = store.activeId ? store.drivers[store.activeId] : null;
+  if (!driver || !driver.activeTrip || !("geolocation" in navigator)) return;
+  const trip = driver.activeTrip;
+  const lastCheck = trip.lastSpeedCheckAt ? new Date(trip.lastSpeedCheckAt).getTime() : 0;
+  if (Date.now() - lastCheck < SPEED_CHECK_INTERVAL_MS) return;
+
+  navigator.geolocation.getCurrentPosition((pos) => {
+    const now = Date.now();
+    let speed = pos.coords.speed; // m/s, often null indoors/on some devices
+    if (speed === null && trip.lastPosition) {
+      const dtS = (now - trip.lastPosition.t) / 1000;
+      if (dtS > 0) {
+        const meters = haversineMeters(trip.lastPosition, { lat: pos.coords.latitude, lng: pos.coords.longitude });
+        speed = meters / dtS;
+      }
+    }
+    const store2 = loadDrivers();
+    const driver2 = store2.activeId ? store2.drivers[store2.activeId] : null;
+    if (!driver2 || !driver2.activeTrip) return; // trip ended while the GPS fix was in flight
+    const t2 = driver2.activeTrip;
+    t2.lastSpeedCheckAt = new Date(now).toISOString();
+    t2.lastPosition = { lat: pos.coords.latitude, lng: pos.coords.longitude, t: now };
+    if (speed !== null) {
+      t2.recentSpeeds = [...(t2.recentSpeeds || []), { t: now, speed }].slice(-2);
+    }
+    saveDrivers(store2);
+
+    const stoppedTwiceRunning = t2.recentSpeeds.length === 2
+      && t2.recentSpeeds.every((s) => s.speed <= SPEED_STOPPED_THRESHOLD_MS);
+    const notify = loadNotifySettings();
+    const dueSoon = notify.nextCheckAt && (new Date(notify.nextCheckAt).getTime() - now) <= AUTO_STOP_LOOKAHEAD_MS;
+    if (stoppedTwiceRunning && dueSoon && !t2.pendingCheckIn) {
+      openPendingCheckIn("auto_stop", null);
+      promptFatigueCheck("Looks like you've stopped and a check-in is coming up soon — good time to get it done now.");
+    }
+  }, () => { /* permission denied or unavailable — this feature just quietly does nothing */ });
 }
 
 function showDriverProfile() {
@@ -826,9 +953,23 @@ function showDriverProfile() {
   el.btnStartTrip.classList.toggle("hidden", tripActive);
   el.btnEndTrip.classList.toggle("hidden", !tripActive);
   el.btnStartTrip.disabled = !checksComplete;
-  el.tripStatus.textContent = tripActive
-    ? `Trip started ${new Date(driver.activeTrip.startedAt).toLocaleTimeString()} — end it to flag this driver for rating.`
-    : (checksComplete ? "" : "Complete both the pursuit and reaction checks before starting a trip.");
+
+  el.btnMarkStopped.classList.toggle("hidden", !tripActive);
+  el.stopReasonRow.classList.add("hidden"); // re-shown by btnMarkStopped's own click handler
+
+  if (tripActive) {
+    const pending = driver.activeTrip.pendingCheckIn;
+    let msg = `Trip started ${new Date(driver.activeTrip.startedAt).toLocaleTimeString()} — end it to flag this driver for rating.`;
+    if (pending) {
+      const reasonLabel = pending.reason === "auto_stop" ? "a detected stop" : pending.reason;
+      msg += ` ⚠️ Check-in owed (${reasonLabel})`;
+      msg += pending.dueAt ? ` — due by ${new Date(pending.dueAt).toLocaleTimeString()}.` : ".";
+      msg += " Ending the trip before it's done costs a strike.";
+    }
+    el.tripStatus.textContent = msg;
+  } else {
+    el.tripStatus.textContent = checksComplete ? "" : "Complete both the pursuit and reaction checks before starting a trip.";
+  }
 }
 
 function updateStartGating() {
@@ -1447,12 +1588,10 @@ function setReactionMetrics(r) {
 const NOTIFY_KEY = "blinkcheck.notify.v1";
 const NOTIFY_CHECK_MS = 60000; // how often the open tab checks whether a reminder is due
 const ADMIN_MESSAGE_KEY = "blinkcheck.adminMessage.v1";
-const NOTIFY_MAX_SNOOZES = 2;         // per check-in cycle — reset once the driver actually tests
-const SNOOZE_MS = 15 * 60000;         // a driver can't always stop the instant a reminder fires
-const DO_NOW_GRACE_MS = 5 * 60000;    // short buffer after "Do the checks now" before nagging again
+const DO_NOW_GRACE_MS = 5 * 60000; // short buffer after "Do the checks now" before nagging again
 
 function loadNotifySettings() {
-  const defaults = { enabled: false, intervalHours: 8, lastNotified: null, snoozeCount: 0, nextCheckAt: null };
+  const defaults = { enabled: false, intervalHours: 8, lastNotified: null, nextCheckAt: null };
   try {
     const raw = localStorage.getItem(NOTIFY_KEY);
     const s = raw ? JSON.parse(raw) : null;
@@ -1464,7 +1603,7 @@ function saveNotifySettings(s) {
   try { localStorage.setItem(NOTIFY_KEY, JSON.stringify(s)); } catch { /* private mode */ }
 }
 
-let fatigueCheckPending = false; // a prompt is already up, waiting on the driver's choice
+let fatigueCheckPending = false; // a prompt is already up, waiting on the driver to dismiss it
 
 /** Never assumes a due reminder means "go do it right now" — a driver on the road needs to
  *  find somewhere safe to stop first. Always asks, via promptFatigueCheck's on-screen choice,
@@ -1477,24 +1616,25 @@ function checkNotifyDue() {
   const dueAt = s.nextCheckAt ? new Date(s.nextCheckAt).getTime()
     : (s.lastNotified ? new Date(s.lastNotified).getTime() + s.intervalHours * 3600000 : 0);
   if (Date.now() < dueAt) return;
+  if (getActiveDriver() && getActiveDriver().activeTrip) openPendingCheckIn("reminder", null);
   promptFatigueCheck("Time for a quick fatigue check-in.");
 }
 
-/** Shows the on-screen snooze-or-do-it-now prompt and, best-effort, a native notification
- *  alongside it. Used both for the ordinary timed reminder and for a message an admin sends
- *  from the dashboard — same choice either way: snooze up to twice, or go take the checks now. */
+/** Shows the on-screen check-in prompt and, best-effort, a native notification alongside
+ *  it. There's no snooze anymore — a driver can't always stop the instant this fires, but
+ *  the honest answer to that is "stop as soon as it's safe", not an indefinite delay. While
+ *  a trip is active, it's now backed by a real consequence (see endTrip): if the trip ends
+ *  with a check-in still owed, that's a strike. */
 function promptFatigueCheck(messageText) {
   fatigueCheckPending = true;
   if ("Notification" in window && Notification.permission === "granted") {
     try { new Notification("BlinkCheck", { body: messageText }); } catch { /* best-effort only */ }
   }
-  const s = loadNotifySettings();
-  const snoozesLeft = NOTIFY_MAX_SNOOZES - (s.snoozeCount || 0);
+  const driver = getActiveDriver();
   el.fatigueMsg.textContent = messageText;
-  el.btnFatigueSnooze.classList.toggle("hidden", snoozesLeft <= 0);
-  el.fatigueSnoozeHint.textContent = snoozesLeft > 0
-    ? `You can snooze ${snoozesLeft} more time${snoozesLeft === 1 ? "" : "s"}.`
-    : "No snoozes left — please take the checks now.";
+  el.fatigueSnoozeHint.textContent = (driver && driver.activeTrip)
+    ? "Please stop as soon as it's safe. If this trip ends before both checks are done, it counts as a strike."
+    : "";
   el.fatigueModal.style.display = "flex";
 }
 
@@ -1572,6 +1712,12 @@ el.driverName.addEventListener("keydown", (e) => {
 el.btnStartTrip.addEventListener("click", () => { startTrip(); updateDriverLock(); });
 el.btnEndTrip.addEventListener("click", () => { endTrip(); updateDriverLock(); });
 
+el.btnMarkStopped.addEventListener("click", () => { el.stopReasonRow.classList.remove("hidden"); });
+el.btnConfirmStop.addEventListener("click", () => {
+  markStopped(el.stopReasonSelect.value);
+  el.stopReasonRow.classList.add("hidden");
+});
+
 el.btnReadinessClose.addEventListener("click", () => { el.readinessModal.style.display = "none"; });
 el.btnReadinessRetry.addEventListener("click", () => {
   el.readinessModal.style.display = "none";
@@ -1579,14 +1725,6 @@ el.btnReadinessRetry.addEventListener("click", () => {
   target.scrollIntoView({ behavior: "smooth", block: "center" });
 });
 
-el.btnFatigueSnooze.addEventListener("click", () => {
-  const s = loadNotifySettings();
-  s.snoozeCount = (s.snoozeCount || 0) + 1;
-  s.nextCheckAt = new Date(Date.now() + SNOOZE_MS).toISOString();
-  saveNotifySettings(s);
-  fatigueCheckPending = false;
-  el.fatigueModal.style.display = "none";
-});
 el.btnFatigueNow.addEventListener("click", () => {
   const s = loadNotifySettings();
   // Doesn't count as a snooze — just a short grace window in case they get pulled away
@@ -1619,6 +1757,7 @@ updateDriverLock();
 el.btnNotify.addEventListener("click", toggleReminders);
 updateNotifyUI();
 if ("Notification" in window) setInterval(checkNotifyDue, NOTIFY_CHECK_MS);
+setInterval(checkTripSpeed, NOTIFY_CHECK_MS); // internally only actually samples every ~10 min
 
 // Real measurement of the active driver's actual stored record size, as a concrete stand-in
 // for "how much would a future backend sync need to send" — nothing here is transmitted.
@@ -1692,7 +1831,12 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden && reaction.phase === "running") {
     abortReaction("The tab lost focus, so the run was discarded. Start again with this tab in front.");
   }
+  // Catches up the 10-minute speed check and the reminder check the moment the tab wakes
+  // up, rather than relying on a timer that a locked/backgrounded phone may have paused
+  // for the whole interval (a real risk during, say, a 30-minute meal stop).
+  if (!document.hidden) { checkNotifyDue(); checkTripSpeed(); }
 });
+window.addEventListener("focus", () => { checkNotifyDue(); checkTripSpeed(); });
 
 window.addEventListener("beforeunload", () => {
   if (state.stream) state.stream.getTracks().forEach((t) => t.stop());

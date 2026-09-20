@@ -213,6 +213,9 @@ function eventNotificationText(ev) {
   if (ev.type === "drive_status") {
     return `${ev.driverName}'s status changed to ${ev.detail.status === "can_drive" ? "Can Drive" : "Not Applicable to Drive"}.`;
   }
+  if (ev.type === "trip_noncompliance_strike") {
+    return `${ev.driverName} ended a trip with a check-in still owed — a strike was added.`;
+  }
   return `${ev.driverName}: update.`;
 }
 
@@ -312,6 +315,16 @@ function renderDrivers() {
           <div><dt class="text-xs text-muted">Strikes</dt><dd class="readout mt-1" style="color: var(--signal);">${d.strikes}</dd></div>
           <div><dt class="text-xs text-muted">Rating</dt><dd class="readout mt-1" style="color: var(--amber);">${avgRating}${rating.count ? ` <span class="text-muted">(${rating.count})</span>` : ""}</dd></div>
         </dl>
+
+        ${d.activeTrip ? `
+        <p class="text-xs text-muted mt-5 mb-2">Trip in progress</p>
+        <p class="text-sm rounded-lg border border-rail px-3 py-2">
+          Started ${new Date(d.activeTrip.startedAt).toLocaleTimeString()}.
+          ${d.activeTrip.stoppedAt ? ` Logged stopped (${escapeHtml(d.activeTrip.stopReason || "other")}) at ${new Date(d.activeTrip.stoppedAt).toLocaleTimeString()}.` : ""}
+          ${d.activeTrip.pendingCheckIn
+            ? ` <span style="color: var(--amber);">Check-in owed (${escapeHtml(d.activeTrip.pendingCheckIn.reason)})${d.activeTrip.pendingCheckIn.dueAt ? `, due by ${new Date(d.activeTrip.pendingCheckIn.dueAt).toLocaleTimeString()}` : ""} — ending the trip now costs a strike.</span>`
+            : ` <span style="color: var(--trace);">No check-in currently owed.</span>`}
+        </p>` : ""}
 
         ${pendingTrips.length ? `
         <p class="text-xs text-muted mt-5 mb-2">Trips awaiting rating</p>
