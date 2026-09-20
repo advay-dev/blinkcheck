@@ -337,7 +337,6 @@ function extractGaze(lm, w, h) {
     gaze: CAMERA_X_FLIP * (gl + gr) / 2,
     ear: (earL + earR) / 2,
     iris: [irisL, irisR],
-    corners: [lOut, lIn, rIn, rOut],
     // Head reference point, for detecting head movement (see HEAD_MOVE_LIMIT).
     // Not yaw-corrected — just "is the head drifting/shaking", not "which way is it turned".
     headCenter: mid(lCentre, rCentre),
@@ -345,18 +344,30 @@ function extractGaze(lm, w, h) {
   };
 }
 
+// Camera-style corner-bracket reticle, the shape a viewfinder autofocus box uses to mark
+// a tracked point. More legible than a filled dot: it reads as "this is being tracked",
+// not just a coloured blob, and scales with interocular distance so it holds its apparent
+// size as the driver moves closer to or further from the camera.
+function drawReticle(c, x, y, size) {
+  const arm = size * 0.55;
+  c.beginPath();
+  c.moveTo(x - size, y - size + arm); c.lineTo(x - size, y - size); c.lineTo(x - size + arm, y - size);
+  c.moveTo(x + size - arm, y - size); c.lineTo(x + size, y - size); c.lineTo(x + size, y - size + arm);
+  c.moveTo(x + size, y + size - arm); c.lineTo(x + size, y + size); c.lineTo(x + size - arm, y + size);
+  c.moveTo(x - size + arm, y + size); c.lineTo(x - size, y + size); c.lineTo(x - size, y + size - arm);
+  c.stroke();
+  c.beginPath(); c.arc(x, y, 1.5, 0, Math.PI * 2); c.fill();
+}
+
 function drawOverlay(g) {
   const c = ctx2d;
   c.clearRect(0, 0, el.overlay.width, el.overlay.height);
   if (!g || !g.ok) return;
-  c.fillStyle = "#38E1C9";
-  for (const p of g.iris) {
-    c.beginPath(); c.arc(p.x, p.y, 4, 0, Math.PI * 2); c.fill();
-  }
-  c.strokeStyle = "rgba(56,225,201,0.45)";
+  const size = Math.max(10, g.interocular * 0.18);
+  c.strokeStyle = "#FFB020";
+  c.fillStyle = "#FFB020";
   c.lineWidth = 2;
-  c.beginPath(); c.moveTo(g.corners[0].x, g.corners[0].y); c.lineTo(g.corners[1].x, g.corners[1].y); c.stroke();
-  c.beginPath(); c.moveTo(g.corners[2].x, g.corners[2].y); c.lineTo(g.corners[3].x, g.corners[3].y); c.stroke();
+  for (const p of g.iris) drawReticle(c, p.x, p.y, size);
 }
 
 /* ------------------------------------------------------------- main loop -- */
