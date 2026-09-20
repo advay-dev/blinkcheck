@@ -16,7 +16,7 @@ body { font-synthesis-weight: none; }
 
 /* ---------- stage ---------- */
 /* 4:3 keeps the whole face in frame on most laptop cameras. */
-.stage { aspect-ratio: 4 / 3; }
+.stage { aspect-ratio: 4 / 3; touch-action: manipulation; }
 @media (min-width: 1024px) { .stage { aspect-ratio: 16 / 10; } }
 
 /* The webcam image is flipped so the feed behaves like a mirror.

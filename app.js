@@ -1426,8 +1426,18 @@ el.btnReactionStart.addEventListener("click", () => {
   if (reaction.phase === "idle" || reaction.phase === "done") startReaction();
 });
 el.btnReactionAbort.addEventListener("click", () => abortReaction());
-el.rStage.addEventListener("click", (e) => {
+// pointerdown, not click: it fires the instant a finger/mouse makes contact, before the
+// browser's tap-vs-scroll/zoom gesture disambiguation and click-synthesis pipeline run.
+// A real touch always has a little finger movement between contact and release — enough
+// that some mobile browsers can cancel the synthesized click entirely, or delay it, even
+// though the tap visually landed on the target. That reads as "I tap and nothing happens",
+// and doesn't show up in synthetic testing that dispatches a click event directly. It's
+// also the more correct choice for a reaction-time measurement in the first place: the
+// moment of contact is the actual response, not the moment the browser finishes deciding
+// it wasn't a gesture.
+el.rStage.addEventListener("pointerdown", (e) => {
   if (reaction.phase !== "running") return;
+  e.preventDefault();
   if (e.target.closest("#reactionTarget")) {
     onTargetTap();
   } else if (!reaction.armed) {

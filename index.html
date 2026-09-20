@@ -267,8 +267,11 @@
           <p id="reactionSub" class="max-w-md text-sm text-muted">Ten targets, one at a time, at random positions and random timing. Tap each one the instant it appears — tapping empty space while waiting counts against you.</p>
         </div>
 
-        <!-- round + progress -->
-        <div class="absolute left-0 right-0 bottom-0">
+        <!-- round + progress — pointer-events-none: it's a full-width strip that can
+             overlap the target's spawn area near the bottom of the stage (spawn y goes up
+             to 85%), and without this a real click there hits this bar instead of the
+             target underneath. -->
+        <div class="pointer-events-none absolute left-0 right-0 bottom-0">
           <div class="flex items-center justify-between px-4 pb-2 text-xs text-muted">
             <span id="reactionRoundLabel">Standby</span>
             <span id="reactionClock" class="readout">0 / 10</span>
