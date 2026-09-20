@@ -162,7 +162,8 @@ const el = {
   driverName: $("driverName"), btnDriverSelect: $("btnDriverSelect"),
   driverProfile: $("driverProfile"), driverProfileName: $("driverProfileName"),
   driverStrikes: $("driverStrikes"), driverBaseline: $("driverBaseline"),
-  driverPursuitStats: $("driverPursuitStats"), driverReactionStats: $("driverReactionStats")
+  driverPursuitStats: $("driverPursuitStats"), driverReactionStats: $("driverReactionStats"),
+  btnNotify: $("btnNotify")
 };
 const ctx2d = el.overlay.getContext("2d");
 
@@ -1112,6 +1113,74 @@ function setReactionMetrics(r) {
   el.rWorst.innerHTML = Math.round(r.worstMs) + '<small> ms</small>';
 }
 
+/* ------------------------------------------------------------ reminders -- */
+/* Periodic "take the test" reminders via the browser Notification API. This is
+   the honest limit of what a static, backend-less site can do: notifications
+   only fire while this tab stays open somewhere (foreground or background) in
+   a browser the user granted permission in. True background push — working
+   even with the browser fully closed — needs a push server, which doesn't
+   exist here on purpose (see README: no build step, no server-side code).
+   The interval is a site-wide setting (adjustable from dashboard.html); each
+   visitor still has to opt in for themselves, because no browser lets a page
+   grant itself notification permission. */
+
+const NOTIFY_KEY = "blinkcheck.notify.v1";
+const NOTIFY_CHECK_MS = 60000; // how often the open tab checks whether a reminder is due
+
+function loadNotifySettings() {
+  const defaults = { enabled: false, intervalHours: 8, lastNotified: null };
+  try {
+    const raw = localStorage.getItem(NOTIFY_KEY);
+    const s = raw ? JSON.parse(raw) : null;
+    return (s && typeof s === "object") ? Object.assign(defaults, s) : defaults;
+  } catch { return defaults; }
+}
+
+function saveNotifySettings(s) {
+  try { localStorage.setItem(NOTIFY_KEY, JSON.stringify(s)); } catch { /* private mode */ }
+}
+
+function checkNotifyDue() {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const s = loadNotifySettings();
+  if (!s.enabled) return;
+  const dueAt = s.lastNotified ? new Date(s.lastNotified).getTime() + s.intervalHours * 3600000 : 0;
+  if (Date.now() < dueAt) return;
+  new Notification("BlinkCheck", { body: "Time for a quick fatigue check-in. Keep this tab open and take the test." });
+  s.lastNotified = new Date().toISOString();
+  saveNotifySettings(s);
+}
+
+function updateNotifyUI() {
+  if (!("Notification" in window)) {
+    el.btnNotify.textContent = "Reminders unsupported";
+    el.btnNotify.disabled = true;
+    return;
+  }
+  const s = loadNotifySettings();
+  const on = s.enabled && Notification.permission === "granted";
+  el.btnNotify.textContent = on ? `Reminders on (every ${s.intervalHours}h)` : "Enable reminders";
+}
+
+function toggleReminders() {
+  if (!("Notification" in window)) return;
+  const s = loadNotifySettings();
+  if (s.enabled && Notification.permission === "granted") {
+    s.enabled = false;
+    saveNotifySettings(s);
+    updateNotifyUI();
+    return;
+  }
+  Notification.requestPermission().then((perm) => {
+    if (perm !== "granted") { updateNotifyUI(); return; }
+    const cur = loadNotifySettings();
+    cur.enabled = true;
+    if (!cur.lastNotified) cur.lastNotified = new Date().toISOString();
+    saveNotifySettings(cur);
+    updateNotifyUI();
+  });
+}
+
 /* ---------------------------------------------------------------- wiring -- */
 
 el.btnCamera.addEventListener("click", initCamera);
@@ -1137,6 +1206,10 @@ el.driverName.addEventListener("keydown", (e) => {
 showDriverProfile();
 updateStartGating();
 updateReactionGating();
+
+el.btnNotify.addEventListener("click", toggleReminders);
+updateNotifyUI();
+if ("Notification" in window) setInterval(checkNotifyDue, NOTIFY_CHECK_MS);
 
 el.btnReactionStart.addEventListener("click", () => {
   if (reaction.phase === "idle" || reaction.phase === "done") startReaction();
