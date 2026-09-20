@@ -329,6 +329,36 @@
 
 </main>
 
+<!-- ============ READINESS POPUP ============ -->
+<!-- Shown once both checks (pursuit + reaction) have a result on record. Advisory only —
+     the app has no way to actually stop anyone from driving. -->
+<div id="readinessModal" style="display:none;" class="fixed inset-0 z-50 items-center justify-center bg-black/70 px-5">
+  <div class="max-w-sm w-full rounded-xl border border-rail bg-panel p-6 text-center">
+    <div id="readinessIcon" class="text-5xl mb-3">✅</div>
+    <p id="readinessTitle" class="font-cond text-2xl leading-none" style="font-weight:700">Ready to Drive</p>
+    <p id="readinessDetail" class="mt-3 text-sm text-muted">Both checks came back clean. Have a safe trip.</p>
+    <div class="mt-5 flex flex-col gap-2">
+      <button id="btnReadinessRetry" class="btn btn-ghost w-full hidden">Repeat the test</button>
+      <button id="btnReadinessClose" class="btn btn-primary w-full">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ FATIGUE CHECK-IN PROMPT ============ -->
+<!-- Shown for the periodic reminder and for an admin-sent message alike. Never assumes the
+     driver can stop immediately — always offers a limited snooze alongside "do it now". -->
+<div id="fatigueModal" style="display:none;" class="fixed inset-0 z-50 items-center justify-center bg-black/70 px-5">
+  <div class="max-w-sm w-full rounded-xl border border-rail bg-panel p-6 text-center">
+    <p class="text-xs text-muted">Fatigue check-in</p>
+    <p id="fatigueMsg" class="mt-2 font-cond text-xl leading-snug" style="font-weight:700">Time for a quick fatigue check-in.</p>
+    <p id="fatigueSnoozeHint" class="mt-2 text-xs text-muted"></p>
+    <div class="mt-5 flex flex-col gap-2">
+      <button id="btnFatigueNow" class="btn btn-primary w-full">Do the checks now</button>
+      <button id="btnFatigueSnooze" class="btn btn-ghost w-full">Snooze 15 minutes</button>
+    </div>
+  </div>
+</div>
+
 <!-- Marks this page as mobile for app.js's phone-only sensor recalibration (wider pursuit-
      test lag compensation). A plain script, so it runs before the deferred module below —
      index.html never sets this, so desktop behaviour is untouched. -->

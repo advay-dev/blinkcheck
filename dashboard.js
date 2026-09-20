@@ -14,6 +14,9 @@ const UNLOCK_KEY = "blinkcheck.dashboard.unlocked";
 const DRIVERS_KEY = "blinkcheck.drivers.v1";
 const NOTIFY_KEY = "blinkcheck.notify.v1";
 const THRESHOLDS_KEY = "blinkcheck.thresholds.v1";
+const DASHBOARD_EVENTS_KEY = "blinkcheck.dashboardEvents.v1";
+const ADMIN_NOTIFY_KEY = "blinkcheck.adminNotify.v1";
+const ADMIN_MESSAGE_KEY = "blinkcheck.adminMessage.v1";
 
 // Must match CONFIG.WARN_MULT/FAIL_MULT and REACTION_CONFIG.WARN_MEDIAN_MS/FAIL_MEDIAN_MS
 // in app.js — this is only what the inputs reset to, app.js owns the real defaults.
@@ -25,6 +28,7 @@ const el = {
   dashBody: $("dashBody"),
   intervalHours: $("intervalHours"), btnSaveInterval: $("btnSaveInterval"),
   btnTestNotify: $("btnTestNotify"), notifyStatus: $("notifyStatus"),
+  btnAdminNotify: $("btnAdminNotify"), adminNotifyStatus: $("adminNotifyStatus"),
   thWarnMult: $("thWarnMult"), thFailMult: $("thFailMult"),
   thWarnMs: $("thWarnMs"), thFailMs: $("thFailMs"),
   btnSaveThresholds: $("btnSaveThresholds"), btnResetThresholds: $("btnResetThresholds"),
@@ -67,8 +71,10 @@ function showDashboard() {
   el.gate.classList.add("hidden");
   el.dashBody.classList.remove("hidden");
   renderNotifySettings();
+  renderAdminNotify();
   renderThresholds();
   renderDrivers();
+  processDashboardEvents();
 }
 
 el.btnUnlock.addEventListener("click", tryUnlock);
@@ -136,6 +142,93 @@ el.btnTestNotify.addEventListener("click", () => {
   }
 });
 
+/* --------------------------------------------------- admin notifications -- */
+/* Watches DASHBOARD_EVENTS_KEY (app.js pushes to it when a driver completes both checks,
+   or when their Can Drive / Not Applicable label changes) and fires a native notification
+   for each new one. Same foreground-only limitation as the driver-side reminder: this only
+   works while this dashboard tab is open, with permission granted, on this same device. */
+
+function loadAdminNotify() {
+  const defaults = { enabled: false, lastSeenEventId: null };
+  try {
+    const raw = localStorage.getItem(ADMIN_NOTIFY_KEY);
+    const s = raw ? JSON.parse(raw) : null;
+    return (s && typeof s === "object") ? Object.assign(defaults, s) : defaults;
+  } catch { return defaults; }
+}
+
+function saveAdminNotify(s) {
+  try { localStorage.setItem(ADMIN_NOTIFY_KEY, JSON.stringify(s)); } catch { /* ignore */ }
+}
+
+function renderAdminNotify() {
+  if (!("Notification" in window)) {
+    el.btnAdminNotify.textContent = "Notifications unsupported";
+    el.btnAdminNotify.disabled = true;
+    return;
+  }
+  const s = loadAdminNotify();
+  const on = s.enabled && Notification.permission === "granted";
+  el.btnAdminNotify.textContent = on ? "Admin notifications on" : "Enable admin notifications";
+  el.adminNotifyStatus.textContent = `This browser: permission ${Notification.permission}. ${on ? "Watching for driver activity." : "Off."}`;
+}
+
+el.btnAdminNotify.addEventListener("click", () => {
+  if (!("Notification" in window)) return;
+  const s = loadAdminNotify();
+  if (s.enabled && Notification.permission === "granted") {
+    s.enabled = false;
+    saveAdminNotify(s);
+    renderAdminNotify();
+    return;
+  }
+  Notification.requestPermission().then((perm) => {
+    if (perm !== "granted") { renderAdminNotify(); return; }
+    const cur = loadAdminNotify();
+    cur.enabled = true;
+    if (!cur.lastSeenEventId) {
+      // Don't fire a backlog of notifications for events that happened before this was
+      // ever turned on — start watching from whatever's already in the log right now.
+      const events = loadDashboardEvents();
+      if (events.length) cur.lastSeenEventId = events[events.length - 1].id;
+    }
+    saveAdminNotify(cur);
+    renderAdminNotify();
+  });
+});
+
+function loadDashboardEvents() {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_EVENTS_KEY);
+    const events = raw ? JSON.parse(raw) : [];
+    return Array.isArray(events) ? events : [];
+  } catch { return []; }
+}
+
+function eventNotificationText(ev) {
+  if (ev.type === "completed_both") {
+    const ready = ev.detail.pursuitVerdict === "pass" && ev.detail.reactionVerdict === "pass";
+    return `${ev.driverName} completed both checks — ${ready ? "Can Drive" : "Not Applicable to Drive"}.`;
+  }
+  if (ev.type === "drive_status") {
+    return `${ev.driverName}'s status changed to ${ev.detail.status === "can_drive" ? "Can Drive" : "Not Applicable to Drive"}.`;
+  }
+  return `${ev.driverName}: update.`;
+}
+
+function processDashboardEvents() {
+  const s = loadAdminNotify();
+  if (!s.enabled || !("Notification" in window) || Notification.permission !== "granted") return;
+  const events = loadDashboardEvents();
+  if (!events.length) return;
+  const lastSeenIdx = s.lastSeenEventId ? events.findIndex((e) => e.id === s.lastSeenEventId) : -1;
+  const unseen = events.slice(lastSeenIdx + 1);
+  if (!unseen.length) return;
+  for (const ev of unseen) new Notification("BlinkCheck", { body: eventNotificationText(ev) });
+  s.lastSeenEventId = events[events.length - 1].id;
+  saveAdminNotify(s);
+}
+
 /* ----------------------------------------------------------- thresholds -- */
 
 function loadThresholds() {
@@ -186,18 +279,24 @@ function renderDrivers() {
     totalTests += p.pass + p.watch + p.fail + p.void + r.pass + r.watch + r.fail + r.void;
     totalStrikes += d.strikes;
 
-    // Older profiles predate rating/trips — default them rather than assume they exist.
+    // Older profiles predate rating/trips/driveStatus — default them rather than assume they exist.
     const rating = d.rating || { sum: 0, count: 0 };
     const trips = d.trips || [];
     const avgRating = rating.count ? (rating.sum / rating.count).toFixed(1) : "—";
     const pendingTrips = trips.filter((t) => t.rating === null);
+    const canDrive = d.driveStatus && d.driveStatus.value === "can_drive";
+    const notApplicable = d.driveStatus && d.driveStatus.value === "not_applicable";
 
     const entries = d.history.slice().reverse();
     const details = document.createElement("details");
     details.className = "rounded-xl border border-rail bg-panel";
     details.innerHTML = `
-      <summary class="px-5 py-3 flex items-center justify-between gap-3 cursor-pointer select-none">
-        <span class="font-cond text-lg" style="font-weight:600">${escapeHtml(d.name)}</span>
+      <summary class="px-5 py-3 flex flex-wrap items-center justify-between gap-3 cursor-pointer select-none">
+        <span class="flex items-center gap-3">
+          <span class="font-cond text-lg" style="font-weight:600">${escapeHtml(d.name)}</span>
+          ${canDrive ? `<span class="font-cond text-sm px-2 py-1 rounded" style="font-weight:700; color:#0B131B; background:var(--trace);">CAN DRIVE</span>` : ""}
+          ${notApplicable ? `<span class="font-cond text-sm px-2 py-1 rounded" style="font-weight:700; color:#0B131B; background:var(--signal);">NOT APPLICABLE TO DRIVE</span>` : ""}
+        </span>
         <span class="flex items-center gap-4 text-xs text-muted">
           <span>${new Date(d.created).toLocaleDateString()}</span>
           <span style="color: var(--amber);">★ ${avgRating}</span>
@@ -235,6 +334,16 @@ function renderDrivers() {
                 <span style="color: ${h.verdict === "fail" ? "var(--signal)" : h.verdict === "watch" ? "var(--amber)" : h.verdict === "pass" ? "var(--trace)" : "var(--muted)"};">${escapeHtml(h.verdict)}</span>
               </li>`).join("")}</ul>`
           : `<p class="text-xs text-muted">No history recorded yet.</p>`}
+
+        <p class="text-xs text-muted mt-5 mb-2">Send this driver a message</p>
+        <p class="text-xs text-muted mb-2">
+          Pops up on their screen (with the same snooze-or-do-it-now choice as a reminder) and
+          sends a notification, next time their tab is open on this device.
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <input data-id="${d.id}" class="msgText flex-1 min-w-[200px] rounded-lg bg-hull border border-rail px-3 py-2 text-sm text-ink focus:outline-none focus:border-amber" placeholder="e.g. Please take your check-in before your next trip" />
+          <button data-id="${d.id}" class="btnSendMessage btn btn-ghost">Send</button>
+        </div>
 
         <div class="mt-5 pt-4 border-t border-rail flex items-center gap-4">
           <button data-id="${d.id}" class="btnResetStrikes text-xs text-muted underline decoration-dotted hover:text-ink">Reset strikes</button>
@@ -295,6 +404,27 @@ function renderDrivers() {
       renderDrivers();
     });
   });
+
+  el.driverList.querySelectorAll(".btnSendMessage").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const id = btn.getAttribute("data-id");
+      const input = el.driverList.querySelector(`.msgText[data-id="${id}"]`);
+      const text = input.value.trim();
+      if (!text) return;
+      sendAdminMessage(id, text);
+      input.value = "";
+    });
+  });
+}
+
+/** Writes a message for one specific driver to ADMIN_MESSAGE_KEY. app.js watches this key
+ *  (storage event) and, if that driver is the one active on this device, shows it exactly
+ *  like a fatigue-check prompt — on-screen popup plus a notification. Same foreground-only,
+ *  same-device limitation as everything else here: this never reaches a different device. */
+function sendAdminMessage(driverId, text) {
+  const msg = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, t: new Date().toISOString(), driverId, text };
+  try { localStorage.setItem(ADMIN_MESSAGE_KEY, JSON.stringify(msg)); } catch { /* ignore */ }
 }
 
 el.btnExport.addEventListener("click", () => {
@@ -320,7 +450,7 @@ el.btnExport.addEventListener("click", () => {
    merges into whatever's already in the repository rather than wiping real profiles, though a
    real driver who happens to share one of these exact names would get overwritten. */
 
-function demoDriver(name, { rmse, gain, lagMs, strikes, pursuit, reaction, history }) {
+function demoDriver(name, { rmse, gain, lagMs, strikes, pursuit, reaction, history, rating, trips, driveStatus }) {
   const now = Date.now();
   return {
     id: name.trim().toLowerCase(),
@@ -332,7 +462,16 @@ function demoDriver(name, { rmse, gain, lagMs, strikes, pursuit, reaction, histo
     history: history.map((h, i) => ({
       t: new Date(now - (history.length - i) * 3600000).toISOString(),
       test: h.test, verdict: h.verdict, detail: {}
-    }))
+    })),
+    rating: rating || { sum: 0, count: 0 },
+    activeTrip: null,
+    trips: (trips || []).map((tr, i) => ({
+      id: `${name.trim().toLowerCase()}-demo-trip-${i}`,
+      startedAt: new Date(now - (i + 2) * 3600000).toISOString(),
+      endedAt: new Date(now - (i + 2) * 3600000 + 25 * 60000).toISOString(),
+      rating: tr
+    })),
+    driveStatus: driveStatus ? { value: driveStatus, updatedAt: new Date(now - 30 * 60000).toISOString() } : null
   };
 }
 
@@ -345,7 +484,8 @@ const DEMO_FLEET = [
       { test: "pursuit", verdict: "pass" }, { test: "reaction", verdict: "pass" },
       { test: "pursuit", verdict: "pass" }, { test: "reaction", verdict: "watch" },
       { test: "pursuit", verdict: "pass" }, { test: "reaction", verdict: "pass" }
-    ]
+    ],
+    rating: { sum: 14, count: 3 }, trips: [5, 5, 4], driveStatus: "can_drive"
   }),
   demoDriver("Vikram Singh", {
     rmse: 0.55, gain: 0.82, lagMs: 210, strikes: 2,
@@ -355,7 +495,8 @@ const DEMO_FLEET = [
       { test: "pursuit", verdict: "watch" }, { test: "reaction", verdict: "watch" },
       { test: "pursuit", verdict: "fail" }, { test: "reaction", verdict: "pass" },
       { test: "pursuit", verdict: "watch" }, { test: "reaction", verdict: "fail" }
-    ]
+    ],
+    rating: { sum: 3, count: 1 }, trips: [3, null], driveStatus: "not_applicable"
   }),
   demoDriver("Amit Sharma", {
     rmse: 0.61, gain: 0.70, lagMs: 260, strikes: 3,
@@ -365,7 +506,8 @@ const DEMO_FLEET = [
       { test: "pursuit", verdict: "fail" }, { test: "reaction", verdict: "fail" },
       { test: "pursuit", verdict: "void" }, { test: "pursuit", verdict: "fail" },
       { test: "reaction", verdict: "fail" }, { test: "pursuit", verdict: "watch" }
-    ]
+    ],
+    rating: { sum: 2, count: 1 }, trips: [2], driveStatus: "not_applicable"
   })
 ];
 
@@ -433,12 +575,15 @@ function escapeHtml(s) {
 
 function refreshAll() {
   renderNotifySettings();
+  renderAdminNotify();
   renderThresholds();
   renderDrivers();
+  processDashboardEvents();
 }
 
 window.addEventListener("storage", (e) => {
-  if (e.key === DRIVERS_KEY || e.key === NOTIFY_KEY || e.key === THRESHOLDS_KEY || e.key === null) refreshAll();
+  if (e.key === DRIVERS_KEY || e.key === NOTIFY_KEY || e.key === THRESHOLDS_KEY
+      || e.key === DASHBOARD_EVENTS_KEY || e.key === ADMIN_NOTIFY_KEY || e.key === null) refreshAll();
 });
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshAll(); });
 window.addEventListener("focus", refreshAll);

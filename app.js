@@ -190,6 +190,11 @@ const el = {
   driverPursuitStats: $("driverPursuitStats"), driverReactionStats: $("driverReactionStats"),
   driverRating: $("driverRating"),
   btnStartTrip: $("btnStartTrip"), btnEndTrip: $("btnEndTrip"), tripStatus: $("tripStatus"),
+  readinessModal: $("readinessModal"), readinessIcon: $("readinessIcon"),
+  readinessTitle: $("readinessTitle"), readinessDetail: $("readinessDetail"),
+  btnReadinessRetry: $("btnReadinessRetry"), btnReadinessClose: $("btnReadinessClose"),
+  fatigueModal: $("fatigueModal"), fatigueMsg: $("fatigueMsg"), fatigueSnoozeHint: $("fatigueSnoozeHint"),
+  btnFatigueNow: $("btnFatigueNow"), btnFatigueSnooze: $("btnFatigueSnooze"),
   btnNotify: $("btnNotify"),
   btnCheckBytes: $("btnCheckBytes"), bytesOutput: $("bytesOutput"),
   btnCheckDelta: $("btnCheckDelta"), deltaOutput: $("deltaOutput")
@@ -589,6 +594,45 @@ const DRIVERS_KEY = "blinkcheck.drivers.v1";
 const DRIVER_HISTORY_CAP = 50; // per driver; oldest entries drop first
 const DRIVER_TRIP_CAP = 50;    // per driver; oldest trips drop first
 
+// A separate, lightweight event log the dashboard watches (via the same "storage" event
+// it already uses for live sync) to fire its own admin-facing notifications. Kept apart
+// from DRIVERS_KEY on purpose: it's a stream of things-that-just-happened, not state.
+const DASHBOARD_EVENTS_KEY = "blinkcheck.dashboardEvents.v1";
+const DASHBOARD_EVENTS_CAP = 30;
+
+function pushDashboardEvent(type, driver, detail) {
+  let events = [];
+  try {
+    const raw = localStorage.getItem(DASHBOARD_EVENTS_KEY);
+    events = raw ? JSON.parse(raw) : [];
+  } catch { events = []; }
+  events.push({
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    t: new Date().toISOString(),
+    type, driverId: driver.id, driverName: driver.name, detail
+  });
+  if (events.length > DASHBOARD_EVENTS_CAP) events.shift();
+  try { localStorage.setItem(DASHBOARD_EVENTS_KEY, JSON.stringify(events)); } catch { /* private mode */ }
+}
+
+/** Most recent verdict recorded for a given test type, or null if it's never been run. */
+function latestVerdict(driver, testType) {
+  for (let i = driver.history.length - 1; i >= 0; i--) {
+    if (driver.history[i].test === testType) return driver.history[i].verdict;
+  }
+  return null;
+}
+
+/** "can_drive" only for the safest combination — a clean Pass on both checks. Anything
+ *  else (borderline, fail, void) on either test is "not_applicable". Returns null if
+ *  one or both checks have never been run yet, so there's nothing to judge. */
+function computeDriveStatus(driver) {
+  const pursuitVerdict = latestVerdict(driver, "pursuit");
+  const reactionVerdict = latestVerdict(driver, "reaction");
+  if (!pursuitVerdict || !reactionVerdict) return null;
+  return (pursuitVerdict === "pass" && reactionVerdict === "pass") ? "can_drive" : "not_applicable";
+}
+
 function emptyDriverStats() {
   return { pass: 0, watch: 0, fail: 0, void: 0 };
 }
@@ -646,8 +690,55 @@ function recordResult(testType, kind, detail) {
   if (driver.history.length > DRIVER_HISTORY_CAP) driver.history.shift();
   if (!driver.pendingChanges) driver.pendingChanges = []; // older profiles predate this field
   driver.pendingChanges.push({ field: "result", ...entry });
+
+  // Once both checks have a result on record, the driver has completed today's pre-trip
+  // screen — surface it here immediately, and flag it for the dashboard. Re-evaluates
+  // (and can re-fire) on every subsequent test too, using whichever verdicts are latest.
+  const pursuitVerdict = latestVerdict(driver, "pursuit");
+  const reactionVerdict = latestVerdict(driver, "reaction");
+  const bothDone = pursuitVerdict && reactionVerdict;
+  if (bothDone) {
+    pushDashboardEvent("completed_both", driver, { pursuitVerdict, reactionVerdict });
+    // Completing both checks is the real resolution of a fatigue-check-in cycle — reset
+    // it here rather than leaving that to a blind timer, so the next reminder is a full
+    // interval away again instead of nagging again a few minutes later.
+    const notify = loadNotifySettings();
+    notify.lastNotified = new Date().toISOString();
+    notify.snoozeCount = 0;
+    notify.nextCheckAt = new Date(Date.now() + notify.intervalHours * 3600000).toISOString();
+    saveNotifySettings(notify);
+  }
+
   saveDrivers(store);
   showDriverProfile();
+  if (bothDone) showReadinessPopup(pursuitVerdict, reactionVerdict);
+}
+
+let readinessRetryTarget = null; // "pursuit" or "reaction" — which section "Repeat the test" jumps to
+
+/** Shown right after whichever test just made both checks have a recorded result.
+ *  "Ready" requires a clean Pass on both — the same safest-combination rule as
+ *  computeDriveStatus. Purely advisory: the app has no way to actually stop anyone
+ *  from driving, only to tell them clearly that they shouldn't yet. */
+function showReadinessPopup(pursuitVerdict, reactionVerdict) {
+  const ready = pursuitVerdict === "pass" && reactionVerdict === "pass";
+  el.readinessIcon.textContent = ready ? "✅" : "🚫";
+  el.readinessTitle.textContent = ready ? "Ready to Drive" : "Not Applicable to Drive";
+  if (ready) {
+    el.readinessDetail.textContent = "Both checks came back clean. Have a safe trip.";
+    el.btnReadinessRetry.classList.add("hidden");
+  } else {
+    const failed = [];
+    if (pursuitVerdict !== "pass") failed.push("pursuit");
+    if (reactionVerdict !== "pass") failed.push("reaction");
+    const label = failed.map((f) => f[0].toUpperCase() + f.slice(1)).join(" and ");
+    el.readinessDetail.textContent =
+      `${label} test${failed.length > 1 ? "s" : ""} didn't come back clean. Repeat ` +
+      `${failed.length > 1 ? "them" : "it"} — don't drive until both checks pass.`;
+    readinessRetryTarget = failed[0];
+    el.btnReadinessRetry.classList.remove("hidden");
+  }
+  el.readinessModal.style.display = "flex";
 }
 
 function saveDriverBaseline(r) {
@@ -731,11 +822,13 @@ function showDriverProfile() {
   el.driverPursuitStats.textContent = `${p.pass} / ${p.watch} / ${p.fail} / ${p.void}`;
   el.driverReactionStats.textContent = `${r.pass} / ${r.watch} / ${r.fail} / ${r.void}`;
   const tripActive = !!driver.activeTrip;
+  const checksComplete = !!(latestVerdict(driver, "pursuit") && latestVerdict(driver, "reaction"));
   el.btnStartTrip.classList.toggle("hidden", tripActive);
   el.btnEndTrip.classList.toggle("hidden", !tripActive);
+  el.btnStartTrip.disabled = !checksComplete;
   el.tripStatus.textContent = tripActive
     ? `Trip started ${new Date(driver.activeTrip.startedAt).toLocaleTimeString()} — end it to flag this driver for rating.`
-    : "";
+    : (checksComplete ? "" : "Complete both the pursuit and reaction checks before starting a trip.");
 }
 
 function updateStartGating() {
@@ -1353,9 +1446,13 @@ function setReactionMetrics(r) {
 
 const NOTIFY_KEY = "blinkcheck.notify.v1";
 const NOTIFY_CHECK_MS = 60000; // how often the open tab checks whether a reminder is due
+const ADMIN_MESSAGE_KEY = "blinkcheck.adminMessage.v1";
+const NOTIFY_MAX_SNOOZES = 2;         // per check-in cycle — reset once the driver actually tests
+const SNOOZE_MS = 15 * 60000;         // a driver can't always stop the instant a reminder fires
+const DO_NOW_GRACE_MS = 5 * 60000;    // short buffer after "Do the checks now" before nagging again
 
 function loadNotifySettings() {
-  const defaults = { enabled: false, intervalHours: 8, lastNotified: null };
+  const defaults = { enabled: false, intervalHours: 8, lastNotified: null, snoozeCount: 0, nextCheckAt: null };
   try {
     const raw = localStorage.getItem(NOTIFY_KEY);
     const s = raw ? JSON.parse(raw) : null;
@@ -1367,15 +1464,55 @@ function saveNotifySettings(s) {
   try { localStorage.setItem(NOTIFY_KEY, JSON.stringify(s)); } catch { /* private mode */ }
 }
 
+let fatigueCheckPending = false; // a prompt is already up, waiting on the driver's choice
+
+/** Never assumes a due reminder means "go do it right now" — a driver on the road needs to
+ *  find somewhere safe to stop first. Always asks, via promptFatigueCheck's on-screen choice,
+ *  rather than the timer itself deciding anything. */
 function checkNotifyDue() {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
+  if (fatigueCheckPending) return;
   const s = loadNotifySettings();
   if (!s.enabled) return;
-  const dueAt = s.lastNotified ? new Date(s.lastNotified).getTime() + s.intervalHours * 3600000 : 0;
+  const dueAt = s.nextCheckAt ? new Date(s.nextCheckAt).getTime()
+    : (s.lastNotified ? new Date(s.lastNotified).getTime() + s.intervalHours * 3600000 : 0);
   if (Date.now() < dueAt) return;
-  new Notification("BlinkCheck", { body: "Time for a quick fatigue check-in. Keep this tab open and take the test." });
-  s.lastNotified = new Date().toISOString();
-  saveNotifySettings(s);
+  promptFatigueCheck("Time for a quick fatigue check-in.");
+}
+
+/** Shows the on-screen snooze-or-do-it-now prompt and, best-effort, a native notification
+ *  alongside it. Used both for the ordinary timed reminder and for a message an admin sends
+ *  from the dashboard — same choice either way: snooze up to twice, or go take the checks now. */
+function promptFatigueCheck(messageText) {
+  fatigueCheckPending = true;
+  if ("Notification" in window && Notification.permission === "granted") {
+    try { new Notification("BlinkCheck", { body: messageText }); } catch { /* best-effort only */ }
+  }
+  const s = loadNotifySettings();
+  const snoozesLeft = NOTIFY_MAX_SNOOZES - (s.snoozeCount || 0);
+  el.fatigueMsg.textContent = messageText;
+  el.btnFatigueSnooze.classList.toggle("hidden", snoozesLeft <= 0);
+  el.fatigueSnoozeHint.textContent = snoozesLeft > 0
+    ? `You can snooze ${snoozesLeft} more time${snoozesLeft === 1 ? "" : "s"}.`
+    : "No snoozes left — please take the checks now.";
+  el.fatigueModal.style.display = "flex";
+}
+
+/** Refreshes the active driver's persisted Can Drive / Not Applicable label. Deliberately
+ *  tied to the reminder firing rather than recomputed live on every test — it's meant to
+ *  read as a periodic check-in snapshot for whoever's watching the dashboard, not a
+ *  constantly-flickering readout. Only pushes a dashboard notification when the value
+ *  actually changes, not on every refresh. */
+function updateDriveStatusLabel() {
+  const store = loadDrivers();
+  const driver = store.activeId ? store.drivers[store.activeId] : null;
+  if (!driver) return;
+  const status = computeDriveStatus(driver);
+  if (!status) return; // one or both checks never run yet — nothing to show
+  const prev = driver.driveStatus ? driver.driveStatus.value : null;
+  driver.driveStatus = { value: status, updatedAt: new Date().toISOString() };
+  saveDrivers(store);
+  if (status !== prev) pushDashboardEvent("drive_status", driver, { status });
 }
 
 function updateNotifyUI() {
@@ -1403,6 +1540,7 @@ function toggleReminders() {
     const cur = loadNotifySettings();
     cur.enabled = true;
     if (!cur.lastNotified) cur.lastNotified = new Date().toISOString();
+    if (!cur.nextCheckAt) cur.nextCheckAt = new Date(Date.now() + cur.intervalHours * 3600000).toISOString();
     saveNotifySettings(cur);
     updateNotifyUI();
   });
@@ -1433,6 +1571,45 @@ el.driverName.addEventListener("keydown", (e) => {
 
 el.btnStartTrip.addEventListener("click", () => { startTrip(); updateDriverLock(); });
 el.btnEndTrip.addEventListener("click", () => { endTrip(); updateDriverLock(); });
+
+el.btnReadinessClose.addEventListener("click", () => { el.readinessModal.style.display = "none"; });
+el.btnReadinessRetry.addEventListener("click", () => {
+  el.readinessModal.style.display = "none";
+  const target = readinessRetryTarget === "reaction" ? el.rStage : el.stage;
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+});
+
+el.btnFatigueSnooze.addEventListener("click", () => {
+  const s = loadNotifySettings();
+  s.snoozeCount = (s.snoozeCount || 0) + 1;
+  s.nextCheckAt = new Date(Date.now() + SNOOZE_MS).toISOString();
+  saveNotifySettings(s);
+  fatigueCheckPending = false;
+  el.fatigueModal.style.display = "none";
+});
+el.btnFatigueNow.addEventListener("click", () => {
+  const s = loadNotifySettings();
+  // Doesn't count as a snooze — just a short grace window in case they get pulled away
+  // before actually starting. Real resolution happens once both checks are recorded
+  // (see recordResult), which resets this cycle properly.
+  s.nextCheckAt = new Date(Date.now() + DO_NOW_GRACE_MS).toISOString();
+  saveNotifySettings(s);
+  fatigueCheckPending = false;
+  el.fatigueModal.style.display = "none";
+  el.stage.scrollIntoView({ behavior: "smooth", block: "center" });
+});
+
+// A message an admin sends from the dashboard to one specific driver. Only acted on when
+// that driver is the one currently active on this device — same shared-device model as
+// everything else, this can't reach a different device.
+window.addEventListener("storage", (e) => {
+  if (e.key !== ADMIN_MESSAGE_KEY || !e.newValue) return;
+  let msg;
+  try { msg = JSON.parse(e.newValue); } catch { return; }
+  const driver = getActiveDriver();
+  if (!driver || msg.driverId !== driver.id) return;
+  promptFatigueCheck(msg.text || "Message from the dashboard.");
+});
 
 showDriverProfile();
 updateStartGating();
