@@ -403,7 +403,12 @@ function renderDrivers() {
           <button data-id="${escapeAttr(d.id)}" class="btnSendMessage btn btn-ghost">Send</button>
         </div>
 
-        <div class="mt-5 pt-4 border-t border-rail flex items-center gap-4">
+        <div class="mt-5 pt-4 border-t border-rail flex flex-wrap items-center gap-4">
+          <span class="flex items-center gap-2">
+            <label class="text-xs text-muted">Strikes</label>
+            <input type="number" min="0" step="1" value="${d.strikes}" class="strikesInput w-16 rounded-lg bg-hull border border-rail px-2 py-1 text-sm text-ink focus:outline-none focus:border-amber" />
+            <button data-id="${escapeAttr(d.id)}" class="btnSetStrikes text-xs text-muted underline decoration-dotted hover:text-ink">Set</button>
+          </span>
           <button data-id="${escapeAttr(d.id)}" class="btnResetStrikes text-xs text-muted underline decoration-dotted hover:text-ink">Reset strikes</button>
           <button data-id="${escapeAttr(d.id)}" class="btnResetBaseline text-xs text-muted underline decoration-dotted hover:text-ink">Reset baseline</button>
           <button data-id="${escapeAttr(d.id)}" class="btnDeleteDriver text-xs text-muted underline decoration-dotted hover:text-ink">Delete driver</button>
@@ -426,6 +431,28 @@ function renderDrivers() {
       const driver = store2.drivers[id];
       if (!driver || !confirm(`Reset strikes for "${driver.name}" to 0? Their baseline, stats and history stay.`)) return;
       driver.strikes = 0;
+      saveDrivers(store2);
+      renderDrivers();
+    });
+  });
+
+  el.driverList.querySelectorAll(".btnSetStrikes").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const id = btn.getAttribute("data-id");
+      // The input sits immediately before this button in the markup — read it by DOM
+      // position, not by rebuilding a `[data-id="..."]` selector out of a driver name that
+      // could contain characters (quotes, brackets) that break CSS selector syntax.
+      const input = btn.previousElementSibling;
+      const value = Math.round(Number(input.value));
+      if (!Number.isFinite(value) || value < 0) {
+        input.value = "";
+        return;
+      }
+      const store2 = loadDrivers();
+      const driver = store2.drivers[id];
+      if (!driver) return;
+      driver.strikes = value;
       saveDrivers(store2);
       renderDrivers();
     });
@@ -486,7 +513,9 @@ function renderDrivers() {
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       const id = btn.getAttribute("data-id");
-      const input = el.driverList.querySelector(`.msgText[data-id="${id}"]`);
+      // Same reasoning as btnSetStrikes above: look up by DOM position, not by rebuilding a
+      // selector string out of a driver name that could contain quote/bracket characters.
+      const input = btn.previousElementSibling;
       const text = input.value.trim();
       if (!text) return;
       sendAdminMessage(id, text);
