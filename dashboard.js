@@ -13,6 +13,11 @@ const UNLOCK_KEY = "blinkcheck.dashboard.unlocked";
 // Must match the keys app.js uses.
 const DRIVERS_KEY = "blinkcheck.drivers.v1";
 const NOTIFY_KEY = "blinkcheck.notify.v1";
+const THRESHOLDS_KEY = "blinkcheck.thresholds.v1";
+
+// Must match CONFIG.WARN_MULT/FAIL_MULT and REACTION_CONFIG.WARN_MEDIAN_MS/FAIL_MEDIAN_MS
+// in app.js — this is only what the inputs reset to, app.js owns the real defaults.
+const DEFAULT_THRESHOLDS = { pursuitWarnMult: 1.2, pursuitFailMult: 1.3, reactionWarnMs: 600, reactionFailMs: 700 };
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -20,7 +25,11 @@ const el = {
   dashBody: $("dashBody"),
   intervalHours: $("intervalHours"), btnSaveInterval: $("btnSaveInterval"),
   btnTestNotify: $("btnTestNotify"), notifyStatus: $("notifyStatus"),
+  thWarnMult: $("thWarnMult"), thFailMult: $("thFailMult"),
+  thWarnMs: $("thWarnMs"), thFailMs: $("thFailMs"),
+  btnSaveThresholds: $("btnSaveThresholds"), btnResetThresholds: $("btnResetThresholds"),
   statDrivers: $("statDrivers"), statTests: $("statTests"), statStrikes: $("statStrikes"),
+  btnExport: $("btnExport"),
   driverRows: $("driverRows"), driverEmpty: $("driverEmpty")
 };
 
@@ -39,6 +48,7 @@ function showDashboard() {
   el.gate.classList.add("hidden");
   el.dashBody.classList.remove("hidden");
   renderNotifySettings();
+  renderThresholds();
   renderDrivers();
 }
 
@@ -107,6 +117,43 @@ el.btnTestNotify.addEventListener("click", () => {
   }
 });
 
+/* ----------------------------------------------------------- thresholds -- */
+
+function loadThresholds() {
+  try {
+    const raw = localStorage.getItem(THRESHOLDS_KEY);
+    const t = raw ? JSON.parse(raw) : null;
+    return (t && typeof t === "object") ? Object.assign({}, DEFAULT_THRESHOLDS, t) : Object.assign({}, DEFAULT_THRESHOLDS);
+  } catch { return Object.assign({}, DEFAULT_THRESHOLDS); }
+}
+
+function saveThresholds(t) {
+  try { localStorage.setItem(THRESHOLDS_KEY, JSON.stringify(t)); } catch { /* ignore */ }
+}
+
+function renderThresholds() {
+  const t = loadThresholds();
+  el.thWarnMult.value = t.pursuitWarnMult;
+  el.thFailMult.value = t.pursuitFailMult;
+  el.thWarnMs.value = t.reactionWarnMs;
+  el.thFailMs.value = t.reactionFailMs;
+}
+
+el.btnSaveThresholds.addEventListener("click", () => {
+  saveThresholds({
+    pursuitWarnMult: Number(el.thWarnMult.value) || DEFAULT_THRESHOLDS.pursuitWarnMult,
+    pursuitFailMult: Number(el.thFailMult.value) || DEFAULT_THRESHOLDS.pursuitFailMult,
+    reactionWarnMs: Number(el.thWarnMs.value) || DEFAULT_THRESHOLDS.reactionWarnMs,
+    reactionFailMs: Number(el.thFailMs.value) || DEFAULT_THRESHOLDS.reactionFailMs
+  });
+  renderThresholds();
+});
+
+el.btnResetThresholds.addEventListener("click", () => {
+  try { localStorage.removeItem(THRESHOLDS_KEY); } catch { /* ignore */ }
+  renderThresholds();
+});
+
 /* -------------------------------------------------------------- drivers -- */
 
 function renderDrivers() {
@@ -128,15 +175,55 @@ function renderDrivers() {
       <td class="px-3 py-2 readout">${p.pass} / ${p.watch} / ${p.fail} / ${p.void}</td>
       <td class="px-3 py-2 readout">${r.pass} / ${r.watch} / ${r.fail} / ${r.void}</td>
       <td class="px-3 py-2 text-muted text-xs">${new Date(d.created).toLocaleDateString()}</td>
-      <td class="px-5 py-2 text-right"><button data-id="${d.id}" class="btnDeleteDriver text-xs text-muted underline decoration-dotted hover:text-ink">Delete</button></td>
+      <td class="px-5 py-2 text-right whitespace-nowrap">
+        <button data-id="${d.id}" class="btnHistory text-xs text-muted underline decoration-dotted hover:text-ink">History</button>
+        <button data-id="${d.id}" class="btnResetStrikes text-xs text-muted underline decoration-dotted hover:text-ink ml-3">Reset strikes</button>
+        <button data-id="${d.id}" class="btnDeleteDriver text-xs text-muted underline decoration-dotted hover:text-ink ml-3">Delete</button>
+      </td>
     `;
     el.driverRows.appendChild(tr);
+
+    const histRow = document.createElement("tr");
+    histRow.id = `hist-${d.id}`;
+    histRow.className = "hidden";
+    const entries = d.history.slice().reverse();
+    histRow.innerHTML = `
+      <td colspan="7" class="px-5 py-3 bg-hull">
+        ${entries.length
+          ? `<ul class="text-xs text-muted space-y-1">${entries.map((h) => `
+              <li>
+                <span class="readout" style="color: var(--ink);">${new Date(h.t).toLocaleString()}</span>
+                — ${escapeHtml(h.test)} —
+                <span style="color: ${h.verdict === "fail" ? "var(--signal)" : h.verdict === "watch" ? "var(--amber)" : h.verdict === "pass" ? "var(--trace)" : "var(--muted)"};">${escapeHtml(h.verdict)}</span>
+              </li>`).join("")}</ul>`
+          : `<p class="text-xs text-muted">No history recorded yet.</p>`}
+      </td>
+    `;
+    el.driverRows.appendChild(histRow);
   }
 
   el.driverEmpty.classList.toggle("hidden", drivers.length > 0);
   el.statDrivers.textContent = String(drivers.length);
   el.statTests.textContent = String(totalTests);
   el.statStrikes.textContent = String(totalStrikes);
+
+  el.driverRows.querySelectorAll(".btnHistory").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.getElementById(`hist-${btn.getAttribute("data-id")}`).classList.toggle("hidden");
+    });
+  });
+
+  el.driverRows.querySelectorAll(".btnResetStrikes").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-id");
+      const store2 = loadDrivers();
+      const driver = store2.drivers[id];
+      if (!driver || !confirm(`Reset strikes for "${driver.name}" to 0? Their baseline, stats and history stay.`)) return;
+      driver.strikes = 0;
+      saveDrivers(store2);
+      renderDrivers();
+    });
+  });
 
   el.driverRows.querySelectorAll(".btnDeleteDriver").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -150,6 +237,22 @@ function renderDrivers() {
     });
   });
 }
+
+el.btnExport.addEventListener("click", () => {
+  const payload = {
+    exported: new Date().toISOString(),
+    drivers: loadDrivers(),
+    notify: loadNotifySettings(),
+    thresholds: loadThresholds()
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `blinkcheck-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
 
 function escapeHtml(s) {
   const div = document.createElement("div");

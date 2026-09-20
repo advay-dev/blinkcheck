@@ -120,6 +120,20 @@ if (IS_MOBILE) {
   CONFIG.MIN_CORR = 0.4;
 }
 
+// Dashboard-configurable score thresholds (dashboard.html's "Score thresholds" panel).
+// Read once at load; a change made in the dashboard takes effect on this page's next
+// load, not live mid-session. Falls back to the CONFIG/REACTION_CONFIG defaults above
+// when nothing has been saved, or when a saved value doesn't parse as a finite number.
+function loadThresholdOverrides() {
+  try {
+    const raw = localStorage.getItem("blinkcheck.thresholds.v1");
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+const thresholdOverrides = loadThresholdOverrides();
+if (isFinite(thresholdOverrides.pursuitWarnMult)) CONFIG.WARN_MULT = thresholdOverrides.pursuitWarnMult;
+if (isFinite(thresholdOverrides.pursuitFailMult)) CONFIG.FAIL_MULT = thresholdOverrides.pursuitFailMult;
+
 const W           = 2 * Math.PI * CONFIG.FREQ_HZ;   // angular frequency [rad/s]
 const FAIL_RMSE   = CONFIG.FAIL_RATIO * W;
 const WARN_RMSE   = CONFIG.WARN_RATIO * W;
@@ -145,7 +159,7 @@ const el = {
   phaseLabel: $("phaseLabel"), clock: $("clock"), progress: $("progress"),
   btnCamera: $("btnCamera"), btnStart: $("btnStart"), btnAbort: $("btnAbort"),
   btnCsv: $("btnCsv"), btnBaseline: $("btnBaseline"),
-  mBase: $("mBase"), mRatio: $("mRatio"),
+  mBase: $("mBase"), mRatio: $("mRatio"), mRatioHint: $("mRatioHint"),
   hint: $("hint"), fps: $("fps"),
   verdict: $("verdict"), verdictText: $("verdictText"), verdictDetail: $("verdictDetail"),
   mRmse: $("mRmse"), mGain: $("mGain"), mLag: $("mLag"),
@@ -157,7 +171,7 @@ const el = {
   rRoundLabel: $("reactionRoundLabel"), rClock: $("reactionClock"), rProgress: $("reactionProgress"),
   btnReactionStart: $("btnReactionStart"), btnReactionAbort: $("btnReactionAbort"),
   rVerdict: $("reactionVerdict"), rVerdictText: $("reactionVerdictText"), rVerdictDetail: $("reactionVerdictDetail"),
-  rMedian: $("rMedian"), rWorst: $("rWorst"), rMiss: $("rMiss"), rFalse: $("rFalse"),
+  rMedian: $("rMedian"), rWorst: $("rWorst"), rMiss: $("rMiss"), rFalse: $("rFalse"), rMedianHint: $("rMedianHint"),
   // --- driver profiles ---
   driverName: $("driverName"), btnDriverSelect: $("btnDriverSelect"),
   driverProfile: $("driverProfile"), driverProfileName: $("driverProfileName"),
@@ -169,6 +183,7 @@ const ctx2d = el.overlay.getContext("2d");
 
 el.cfgFreq.textContent = CONFIG.FREQ_HZ.toFixed(2);
 el.cfgPeak.textContent = W.toFixed(2);
+el.mRatioHint.textContent = `Fail at ${CONFIG.FAIL_MULT}×, borderline from ${CONFIG.WARN_MULT}×`;
 
 /* ----------------------------------------------------------------- state -- */
 
@@ -952,6 +967,11 @@ const REACTION_CONFIG = {
   MAX_MISSES:       1,       // more misses than this fails outright; a miss is a lapse
   MAX_FALSE_STARTS: 2        // more taps-on-nothing than this fails outright
 };
+
+// Same dashboard-configurable overrides as CONFIG above (see loadThresholdOverrides()).
+if (isFinite(thresholdOverrides.reactionWarnMs)) REACTION_CONFIG.WARN_MEDIAN_MS = thresholdOverrides.reactionWarnMs;
+if (isFinite(thresholdOverrides.reactionFailMs)) REACTION_CONFIG.FAIL_MEDIAN_MS = thresholdOverrides.reactionFailMs;
+el.rMedianHint.textContent = `Fail at ${REACTION_CONFIG.FAIL_MEDIAN_MS} ms, borderline from ${REACTION_CONFIG.WARN_MEDIAN_MS} ms`;
 
 const reaction = {
   phase: "idle",   // idle | running | done
