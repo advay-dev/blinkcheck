@@ -617,8 +617,12 @@ function pushDashboardEvent(type, driver, detail) {
     t: new Date().toISOString(),
     type, driverId: driver.id, driverName: driver.name, detail
   });
-  if (events.length > DASHBOARD_EVENTS_CAP) events.shift();
-  try { localStorage.setItem(DASHBOARD_EVENTS_KEY, JSON.stringify(events)); } catch { /* private mode */ }
+  // A single shift() only ever removes one entry per call — harmless for organic one-at-a-
+  // time growth, but if the array is ever already over cap (e.g. a corrupted or manually
+  // edited localStorage value), it would hold steady above the cap forever instead of
+  // trimming back down. slice(-CAP) actually enforces the limit regardless of how it got there.
+  const trimmed = events.length > DASHBOARD_EVENTS_CAP ? events.slice(-DASHBOARD_EVENTS_CAP) : events;
+  try { localStorage.setItem(DASHBOARD_EVENTS_KEY, JSON.stringify(trimmed)); } catch { /* private mode */ }
 }
 
 /** Most recent verdict recorded for a given test type, or null if it's never been run. */
@@ -682,7 +686,9 @@ function recordResult(testType, kind, detail) {
   if (kind === "fail") driver.strikes++;
   const entry = { t: new Date().toISOString(), test: testType, verdict: kind, detail };
   driver.history.push(entry);
-  if (driver.history.length > DRIVER_HISTORY_CAP) driver.history.shift();
+  // slice(-CAP), not a single shift(): a corrupted/imported profile that's already over
+  // cap should actually trim back down, not just hold steady one-over forever.
+  if (driver.history.length > DRIVER_HISTORY_CAP) driver.history = driver.history.slice(-DRIVER_HISTORY_CAP);
   if (!driver.pendingChanges) driver.pendingChanges = []; // older profiles predate this field
   driver.pendingChanges.push({ field: "result", ...entry });
 
@@ -787,7 +793,7 @@ function endTrip() {
   if (strikeForNoncompliance) driver.strikes++;
   if (!driver.trips) driver.trips = []; // older profiles predate this field
   driver.trips.push(trip);
-  if (driver.trips.length > DRIVER_TRIP_CAP) driver.trips.shift();
+  if (driver.trips.length > DRIVER_TRIP_CAP) driver.trips = driver.trips.slice(-DRIVER_TRIP_CAP);
   driver.activeTrip = null;
   if (!driver.pendingChanges) driver.pendingChanges = [];
   driver.pendingChanges.push({ field: "trip_ended", t: trip.endedAt, value: trip });

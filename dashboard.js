@@ -377,7 +377,7 @@ function renderDrivers() {
           ${pendingTrips.map((t) => `
             <li class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rail px-3 py-2">
               <span class="text-xs text-muted">${new Date(t.startedAt).toLocaleString()} → ${new Date(t.endedAt).toLocaleTimeString()}</span>
-              <span class="flex gap-1" data-driver-id="${d.id}" data-trip-id="${t.id}">
+              <span class="flex gap-1" data-driver-id="${escapeAttr(d.id)}" data-trip-id="${escapeAttr(t.id)}">
                 ${[1, 2, 3, 4, 5].map((n) => `<button data-value="${n}" class="btnRateTrip text-xl leading-none text-muted hover:text-amber" title="Rate ${n} star${n === 1 ? "" : "s"}">☆</button>`).join("")}
               </span>
             </li>`).join("")}
@@ -399,14 +399,14 @@ function renderDrivers() {
           sends a notification, next time their tab is open on this device.
         </p>
         <div class="flex flex-wrap gap-2">
-          <input data-id="${d.id}" class="msgText flex-1 min-w-[200px] rounded-lg bg-hull border border-rail px-3 py-2 text-sm text-ink focus:outline-none focus:border-amber" placeholder="e.g. Please take your check-in before your next trip" />
-          <button data-id="${d.id}" class="btnSendMessage btn btn-ghost">Send</button>
+          <input data-id="${escapeAttr(d.id)}" class="msgText flex-1 min-w-[200px] rounded-lg bg-hull border border-rail px-3 py-2 text-sm text-ink focus:outline-none focus:border-amber" placeholder="e.g. Please take your check-in before your next trip" />
+          <button data-id="${escapeAttr(d.id)}" class="btnSendMessage btn btn-ghost">Send</button>
         </div>
 
         <div class="mt-5 pt-4 border-t border-rail flex items-center gap-4">
-          <button data-id="${d.id}" class="btnResetStrikes text-xs text-muted underline decoration-dotted hover:text-ink">Reset strikes</button>
-          <button data-id="${d.id}" class="btnResetBaseline text-xs text-muted underline decoration-dotted hover:text-ink">Reset baseline</button>
-          <button data-id="${d.id}" class="btnDeleteDriver text-xs text-muted underline decoration-dotted hover:text-ink">Delete driver</button>
+          <button data-id="${escapeAttr(d.id)}" class="btnResetStrikes text-xs text-muted underline decoration-dotted hover:text-ink">Reset strikes</button>
+          <button data-id="${escapeAttr(d.id)}" class="btnResetBaseline text-xs text-muted underline decoration-dotted hover:text-ink">Reset baseline</button>
+          <button data-id="${escapeAttr(d.id)}" class="btnDeleteDriver text-xs text-muted underline decoration-dotted hover:text-ink">Delete driver</button>
         </div>
       </div>
     `;
@@ -639,6 +639,18 @@ function escapeHtml(s) {
   const div = document.createElement("div");
   div.textContent = s;
   return div.innerHTML;
+}
+
+/** escapeHtml() only escapes what innerHTML's text-node serialization naturally escapes
+ *  (&, <, >) — it does NOT escape quotes, so it's unsafe inside a quoted HTML attribute.
+ *  driver.id comes straight from a driver's typed name (lowercased), and every id in this
+ *  file lands inside a data-id="..." attribute — a name like `foo" onmouseover="..."` broke
+ *  out of the attribute and created a live, executing event handler. This escapes all five
+ *  characters that matter in an attribute value. */
+function escapeAttr(s) {
+  return String(s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 /* ------------------------------------------------------------- live sync -- */
