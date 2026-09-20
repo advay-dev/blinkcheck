@@ -186,6 +186,12 @@ function renderDrivers() {
     totalTests += p.pass + p.watch + p.fail + p.void + r.pass + r.watch + r.fail + r.void;
     totalStrikes += d.strikes;
 
+    // Older profiles predate rating/trips — default them rather than assume they exist.
+    const rating = d.rating || { sum: 0, count: 0 };
+    const trips = d.trips || [];
+    const avgRating = rating.count ? (rating.sum / rating.count).toFixed(1) : "—";
+    const pendingTrips = trips.filter((t) => t.rating === null);
+
     const entries = d.history.slice().reverse();
     const details = document.createElement("details");
     details.className = "rounded-xl border border-rail bg-panel";
@@ -194,16 +200,31 @@ function renderDrivers() {
         <span class="font-cond text-lg" style="font-weight:600">${escapeHtml(d.name)}</span>
         <span class="flex items-center gap-4 text-xs text-muted">
           <span>${new Date(d.created).toLocaleDateString()}</span>
+          <span style="color: var(--amber);">★ ${avgRating}</span>
           <span style="color: var(--signal);">${d.strikes} strike${d.strikes === 1 ? "" : "s"}</span>
+          ${pendingTrips.length ? `<span style="color: var(--amber);">${pendingTrips.length} trip${pendingTrips.length === 1 ? "" : "s"} awaiting rating</span>` : ""}
         </span>
       </summary>
       <div class="border-t border-rail p-5">
-        <dl class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+        <dl class="grid grid-cols-2 sm:grid-cols-5 gap-4 text-sm">
           <div><dt class="text-xs text-muted">Baseline RMSE</dt><dd class="readout mt-1">${d.baseline ? d.baseline.rmse.toFixed(3) : "not set"}</dd></div>
           <div><dt class="text-xs text-muted">Pursuit P/B/F/V</dt><dd class="readout mt-1">${p.pass} / ${p.watch} / ${p.fail} / ${p.void}</dd></div>
           <div><dt class="text-xs text-muted">Reaction P/B/F/V</dt><dd class="readout mt-1">${r.pass} / ${r.watch} / ${r.fail} / ${r.void}</dd></div>
           <div><dt class="text-xs text-muted">Strikes</dt><dd class="readout mt-1" style="color: var(--signal);">${d.strikes}</dd></div>
+          <div><dt class="text-xs text-muted">Rating</dt><dd class="readout mt-1" style="color: var(--amber);">${avgRating}${rating.count ? ` <span class="text-muted">(${rating.count})</span>` : ""}</dd></div>
         </dl>
+
+        ${pendingTrips.length ? `
+        <p class="text-xs text-muted mt-5 mb-2">Trips awaiting rating</p>
+        <ul class="text-sm space-y-2">
+          ${pendingTrips.map((t) => `
+            <li class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rail px-3 py-2">
+              <span class="text-xs text-muted">${new Date(t.startedAt).toLocaleString()} → ${new Date(t.endedAt).toLocaleTimeString()}</span>
+              <span class="flex gap-1" data-driver-id="${d.id}" data-trip-id="${t.id}">
+                ${[1, 2, 3, 4, 5].map((n) => `<button data-value="${n}" class="btnRateTrip text-xl leading-none text-muted hover:text-amber" title="Rate ${n} star${n === 1 ? "" : "s"}">☆</button>`).join("")}
+              </span>
+            </li>`).join("")}
+        </ul>` : ""}
 
         <p class="text-xs text-muted mt-5 mb-2">Result history</p>
         ${entries.length
@@ -250,6 +271,26 @@ function renderDrivers() {
       if (!confirm(`Delete driver "${store2.drivers[id]?.name}"? This removes their baseline, strikes and history.`)) return;
       delete store2.drivers[id];
       if (store2.activeId === id) store2.activeId = null;
+      saveDrivers(store2);
+      renderDrivers();
+    });
+  });
+
+  el.driverList.querySelectorAll(".btnRateTrip").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const wrap = btn.closest("[data-trip-id]");
+      const driverId = wrap.getAttribute("data-driver-id");
+      const tripId = wrap.getAttribute("data-trip-id");
+      const value = Number(btn.getAttribute("data-value"));
+      const store2 = loadDrivers();
+      const driver = store2.drivers[driverId];
+      const trip = driver && (driver.trips || []).find((t) => t.id === tripId);
+      if (!trip || trip.rating !== null) return; // already rated elsewhere, or driver/trip gone
+      trip.rating = value;
+      if (!driver.rating) driver.rating = { sum: 0, count: 0 };
+      driver.rating.sum += value;
+      driver.rating.count += 1;
       saveDrivers(store2);
       renderDrivers();
     });

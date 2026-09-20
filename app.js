@@ -188,6 +188,8 @@ const el = {
   driverProfile: $("driverProfile"), driverProfileName: $("driverProfileName"),
   driverStrikes: $("driverStrikes"), driverBaseline: $("driverBaseline"),
   driverPursuitStats: $("driverPursuitStats"), driverReactionStats: $("driverReactionStats"),
+  driverRating: $("driverRating"),
+  btnStartTrip: $("btnStartTrip"), btnEndTrip: $("btnEndTrip"), tripStatus: $("tripStatus"),
   btnNotify: $("btnNotify"),
   btnCheckBytes: $("btnCheckBytes"), bytesOutput: $("bytesOutput"),
   btnCheckDelta: $("btnCheckDelta"), deltaOutput: $("deltaOutput")
@@ -585,6 +587,7 @@ function closeCalibration() {
 
 const DRIVERS_KEY = "blinkcheck.drivers.v1";
 const DRIVER_HISTORY_CAP = 50; // per driver; oldest entries drop first
+const DRIVER_TRIP_CAP = 50;    // per driver; oldest trips drop first
 
 function emptyDriverStats() {
   return { pass: 0, watch: 0, fail: 0, void: 0 };
@@ -619,7 +622,10 @@ function selectDriver(name) {
       baseline: null, strikes: 0,
       stats: { pursuit: emptyDriverStats(), reaction: emptyDriverStats() },
       history: [],
-      pendingChanges: [] // delta log since the last "Check transferable size" — see downloadable-size UI
+      pendingChanges: [], // delta log since the last "Check transferable size" — see downloadable-size UI
+      rating: { sum: 0, count: 0 }, // set by the dashboard, one rating per completed trip
+      activeTrip: null,  // { startedAt } while a trip is in progress, else null
+      trips: []          // { id, startedAt, endedAt, rating: null until the dashboard rates it }
     };
   }
   store.activeId = id;
@@ -668,6 +674,42 @@ function clearDriverBaseline() {
   setVerdict("void", "Baseline cleared", "The next scored run becomes this driver's new rested baseline. Record it while they're alert.");
 }
 
+/* ----------------------------------------------------------------- trips -- */
+/* A trip has no score of its own — it's just a start/end timestamp pair that flags
+ * to the dashboard "rate this driver". The actual 1-5 rating is entered on the
+ * dashboard, by whoever is watching the driver, not self-reported here. */
+
+function startTrip() {
+  const store = loadDrivers();
+  const driver = store.activeId ? store.drivers[store.activeId] : null;
+  if (!driver || driver.activeTrip) return;
+  driver.activeTrip = { startedAt: new Date().toISOString() };
+  if (!driver.pendingChanges) driver.pendingChanges = [];
+  driver.pendingChanges.push({ field: "trip_started", t: driver.activeTrip.startedAt });
+  saveDrivers(store);
+  showDriverProfile();
+}
+
+function endTrip() {
+  const store = loadDrivers();
+  const driver = store.activeId ? store.drivers[store.activeId] : null;
+  if (!driver || !driver.activeTrip) return;
+  const trip = {
+    id: `${driver.id}-${Date.now()}`,
+    startedAt: driver.activeTrip.startedAt,
+    endedAt: new Date().toISOString(),
+    rating: null
+  };
+  if (!driver.trips) driver.trips = []; // older profiles predate this field
+  driver.trips.push(trip);
+  if (driver.trips.length > DRIVER_TRIP_CAP) driver.trips.shift();
+  driver.activeTrip = null;
+  if (!driver.pendingChanges) driver.pendingChanges = [];
+  driver.pendingChanges.push({ field: "trip_ended", t: trip.endedAt, value: trip });
+  saveDrivers(store);
+  showDriverProfile();
+}
+
 function showDriverProfile() {
   const driver = getActiveDriver();
   if (!driver) {
@@ -679,6 +721,8 @@ function showDriverProfile() {
   el.driverProfile.classList.remove("hidden");
   el.driverProfileName.textContent = driver.name;
   el.driverStrikes.textContent = String(driver.strikes);
+  const rating = driver.rating; // older profiles predate this field
+  el.driverRating.textContent = (rating && rating.count) ? (rating.sum / rating.count).toFixed(1) : "—";
   const baselineText = driver.baseline ? driver.baseline.rmse.toFixed(3) + '<small> /s</small>' : "not set";
   el.driverBaseline.innerHTML = baselineText;
   el.mBase.innerHTML = baselineText;
@@ -686,6 +730,12 @@ function showDriverProfile() {
   const p = driver.stats.pursuit, r = driver.stats.reaction;
   el.driverPursuitStats.textContent = `${p.pass} / ${p.watch} / ${p.fail} / ${p.void}`;
   el.driverReactionStats.textContent = `${r.pass} / ${r.watch} / ${r.fail} / ${r.void}`;
+  const tripActive = !!driver.activeTrip;
+  el.btnStartTrip.classList.toggle("hidden", tripActive);
+  el.btnEndTrip.classList.toggle("hidden", !tripActive);
+  el.tripStatus.textContent = tripActive
+    ? `Trip started ${new Date(driver.activeTrip.startedAt).toLocaleTimeString()} — end it to flag this driver for rating.`
+    : "";
 }
 
 function updateStartGating() {
@@ -698,10 +748,13 @@ function updateReactionGating() {
 
 /** Locks driver switching while either test is running. Both tests read the active
  *  driver at scoring time, so switching mid-run risks crashing (pursuit dereferences
- *  driver.baseline) or misattributing a result to the wrong driver (reaction). */
+ *  driver.baseline) or misattributing a result to the wrong driver (reaction). Also
+ *  locked mid-trip, for the same reason: ending someone else's trip would flag the
+ *  wrong driver for the dashboard's rating. */
 function updateDriverLock() {
   const pursuitRunning = state.phase === PHASE.CALIBRATING || state.phase === PHASE.TESTING;
-  el.btnDriverSelect.disabled = pursuitRunning || reaction.phase === "running";
+  const driver = getActiveDriver();
+  el.btnDriverSelect.disabled = pursuitRunning || reaction.phase === "running" || !!(driver && driver.activeTrip);
 }
 
 /* --------------------------------------------------------------- scoring -- */
@@ -1378,9 +1431,13 @@ el.driverName.addEventListener("keydown", (e) => {
   if (e.key === "Enter") el.btnDriverSelect.click();
 });
 
+el.btnStartTrip.addEventListener("click", () => { startTrip(); updateDriverLock(); });
+el.btnEndTrip.addEventListener("click", () => { endTrip(); updateDriverLock(); });
+
 showDriverProfile();
 updateStartGating();
 updateReactionGating();
+updateDriverLock();
 
 el.btnNotify.addEventListener("click", toggleReminders);
 updateNotifyUI();
