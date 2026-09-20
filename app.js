@@ -189,7 +189,8 @@ const el = {
   driverStrikes: $("driverStrikes"), driverBaseline: $("driverBaseline"),
   driverPursuitStats: $("driverPursuitStats"), driverReactionStats: $("driverReactionStats"),
   btnNotify: $("btnNotify"),
-  btnCheckBytes: $("btnCheckBytes"), bytesOutput: $("bytesOutput")
+  btnCheckBytes: $("btnCheckBytes"), bytesOutput: $("bytesOutput"),
+  btnCheckDelta: $("btnCheckDelta"), deltaOutput: $("deltaOutput")
 };
 const ctx2d = el.overlay.getContext("2d");
 
@@ -617,7 +618,8 @@ function selectDriver(name) {
       id, name: trimmed, created: new Date().toISOString(),
       baseline: null, strikes: 0,
       stats: { pursuit: emptyDriverStats(), reaction: emptyDriverStats() },
-      history: []
+      history: [],
+      pendingChanges: [] // delta log since the last "Check transferable size" — see downloadable-size UI
     };
   }
   store.activeId = id;
@@ -633,8 +635,11 @@ function recordResult(testType, kind, detail) {
   if (!driver) return;
   driver.stats[testType][kind] = (driver.stats[testType][kind] || 0) + 1;
   if (kind === "fail") driver.strikes++;
-  driver.history.push({ t: new Date().toISOString(), test: testType, verdict: kind, detail });
+  const entry = { t: new Date().toISOString(), test: testType, verdict: kind, detail };
+  driver.history.push(entry);
   if (driver.history.length > DRIVER_HISTORY_CAP) driver.history.shift();
+  if (!driver.pendingChanges) driver.pendingChanges = []; // older profiles predate this field
+  driver.pendingChanges.push({ field: "result", ...entry });
   saveDrivers(store);
   showDriverProfile();
 }
@@ -645,6 +650,8 @@ function saveDriverBaseline(r) {
   if (!driver) return null;
   const rmse = Math.min(r.rmse, CONFIG.BASELINE_RMSE_CAP);
   driver.baseline = { rmse, gain: r.gain, lagMs: r.lagMs, recorded: new Date().toISOString() };
+  if (!driver.pendingChanges) driver.pendingChanges = [];
+  driver.pendingChanges.push({ field: "baseline", t: driver.baseline.recorded, value: driver.baseline });
   saveDrivers(store);
   return driver.baseline;
 }
@@ -654,6 +661,8 @@ function clearDriverBaseline() {
   const driver = store.activeId ? store.drivers[store.activeId] : null;
   if (!driver) return;
   driver.baseline = null;
+  if (!driver.pendingChanges) driver.pendingChanges = [];
+  driver.pendingChanges.push({ field: "baseline_cleared", t: new Date().toISOString() });
   saveDrivers(store);
   showDriverProfile();
   setVerdict("void", "Baseline cleared", "The next scored run becomes this driver's new rested baseline. Record it while they're alert.");
@@ -1014,13 +1023,14 @@ function downloadReactionCsv() {
 /* ------------------------------------------------------------------ audio -- */
 /* Zero-dependency synthesized cues via the native Web Audio API — no MP3s, no assets
    to fetch. The AudioContext is created lazily on first use, not at page load.
-   Everything in here is wrapped in try/catch and never throws outward: a chime fires
-   from inside a setTimeout callback, not directly inside a click handler, which is
-   exactly the call pattern strict autoplay-gesture policies (Safari especially) can
-   reject — an uncaught throw here previously broke the calling code entirely (a
-   target's armed/timeout state never got set up, a test never got scored), which is
-   a much worse failure than a missing sound effect. Audio is a nice-to-have; it must
-   never be able to break the actual test. */
+   Everything in here is wrapped in try/catch and never throws outward — a cue fired
+   from outside a direct click handler (a setTimeout callback, a requestAnimationFrame
+   loop) is exactly the call pattern strict autoplay-gesture policies (Safari
+   especially) can reject, and an uncaught throw here previously broke the calling code
+   entirely. Audio is a nice-to-have; it must never be able to break the actual test.
+   The reaction test's own cues (target chime, false-start buzz) were removed after
+   repeated reports of the test breaking with them on — only the pursuit test's
+   completion beep and head-movement alert use this now. */
 
 let audioCtx = null;
 function getAudioCtx() {
@@ -1057,8 +1067,6 @@ function playTone(freq, durationMs, type, gainPeak) {
   }
 }
 
-const playTargetChime = () => playTone(1200, 80, "sine", 0.18);
-const playFalseStartBuzz = () => playTone(120, 180, "sawtooth", 0.12);
 const playHeadAlert = () => playTone(300, 220, "triangle", 0.16);
 function playCompletionBeep() {
   playTone(880, 90, "square", 0.15);
@@ -1125,7 +1133,6 @@ function spawnTarget() {
   reaction.shownY = y;
   reaction.armed = true;
   reaction.timeoutId = setTimeout(onTargetTimeout, REACTION_CONFIG.TARGET_MS);
-  playTargetChime(); // game state is already committed above; a side effect firing last can't break it
 }
 
 function onTargetTimeout() {
@@ -1204,7 +1211,6 @@ function finishReaction() {
   el.btnReactionCsv.disabled = false;
   el.rRoundLabel.textContent = "Scored";
   el.rProgress.style.width = "100%";
-  playCompletionBeep();
 
   const r = scoreReaction();
   setReactionMetrics(r);
@@ -1393,6 +1399,29 @@ el.btnCheckBytes.addEventListener("click", () => {
   el.bytesOutput.textContent = `${driver.name}'s full profile: ${bytes.toLocaleString()} bytes.`;
 });
 
+// Real incremental-sync size: only what changed since the last check, not the whole
+// profile. saveDriverBaseline()/recordResult()/clearDriverBaseline() append to
+// pendingChanges as they happen; this reads it, reports its byte size, then clears
+// it — the same lifecycle a real client would use (drop a change once its sync is
+// confirmed), simulated here since there's no real backend to confirm delivery.
+el.btnCheckDelta.addEventListener("click", () => {
+  const store = loadDrivers();
+  const driver = store.activeId ? store.drivers[store.activeId] : null;
+  if (!driver) {
+    el.deltaOutput.textContent = "No active driver selected.";
+    return;
+  }
+  const pending = driver.pendingChanges || [];
+  if (pending.length === 0) {
+    el.deltaOutput.textContent = "No changes since last sync — 0 bytes.";
+    return;
+  }
+  const bytes = new Blob([JSON.stringify(pending)]).size;
+  el.deltaOutput.textContent = `${pending.length} change${pending.length === 1 ? "" : "s"} since last sync: ${bytes.toLocaleString()} bytes. Cleared — next check starts fresh.`;
+  driver.pendingChanges = [];
+  saveDrivers(store);
+});
+
 el.btnReactionStart.addEventListener("click", () => {
   if (reaction.phase === "idle" || reaction.phase === "done") startReaction();
 });
@@ -1403,7 +1432,6 @@ el.rStage.addEventListener("click", (e) => {
     onTargetTap();
   } else if (!reaction.armed) {
     reaction.falseStarts++;
-    playFalseStartBuzz();
     const rect = el.rStage.getBoundingClientRect();
     reaction.falseStartLog.push({
       t: (performance.now() - reaction.t0) / 1000,
