@@ -364,8 +364,8 @@ function drawOverlay(g) {
   c.clearRect(0, 0, el.overlay.width, el.overlay.height);
   if (!g || !g.ok) return;
   const size = Math.max(10, g.interocular * 0.18);
-  c.strokeStyle = "#FFB020";
-  c.fillStyle = "#FFB020";
+  c.strokeStyle = "#38E1C9";
+  c.fillStyle = "#38E1C9";
   c.lineWidth = 2;
   for (const p of g.iris) drawReticle(c, p.x, p.y, size);
 }
