@@ -1,239 +1,239 @@
 # BlinkCheck — conversation handoff (paste this into a new chat)
 
-Complete state of the BlinkCheck project as of commit `5a26da9`. Written so a fresh AI
-assistant (or the user themself, later) can pick this up with zero prior context. This
-supersedes an earlier, now-stale version of this same file — a lot changed after it was
-first written, most notably a whole pitch-demo feature set and a multi-round bug hunt on
-the reaction test's touch handling.
+Complete state of the BlinkCheck project as of commit `239a73b` on `main`, pushed to
+`https://github.com/advay-dev/blinkcheck` and live at
+`https://advay-dev.github.io/blinkcheck/`. Written so a fresh AI assistant (or the user
+themself, later) can pick this up with zero prior context. This supersedes all earlier
+versions of this file.
 
 ## 1. What this is, and the core constraint
 
 BlinkCheck is a **hackathon prototype**: a browser-based fatigue-screening tool with two
 short tests (smooth-pursuit eye tracking, visual reaction time), each giving a Pass /
-Borderline / Fail verdict. **Not a medical device** — this is stated in the UI and must
-stay true; nothing here has been validated against real data.
+Borderline / Fail verdict. **Not a medical device** — stated in the UI, must stay true.
 
-**100% client-side, no backend, no build step.** Static HTML/CSS/JS, intended for GitHub
-Pages. All camera processing and scoring happens on-device — the UI literally says "Video
-never leaves this device," and every design decision this session has protected that claim.
-**Not yet deployed** — everything so far has been tested via local servers; the user's
-stated plan is to push to GitHub once satisfied.
+**100% client-side, no backend, no build step.** Static HTML/CSS/JS on GitHub Pages. All
+camera processing and scoring happens on-device — "Video never leaves this device" is a
+real, protected claim. **A real backend for cross-device sync was explicitly scoped and
+explicitly deferred** — the user's own words this session: "the reason we didn't go for a
+backend was because we don't have enough time, you said it will take a day." Every
+multi-device limitation below is a direct consequence of that decision, not an oversight.
+
+**Now deployed and live** (this is new since the last handoff): public GitHub repo
+`advay-dev/blinkcheck`, GitHub Pages enabled from `main` root. Desktop:
+`https://advay-dev.github.io/blinkcheck/` — Phone: `.../mobile.html` — Dashboard:
+`.../dashboard.html` (unlisted but **publicly reachable if the URL is known** — flagged to
+the user that the dashboard passphrase is plaintext in `dashboard.js`'s source, now public;
+no decision made yet on whether to pull it from the deployed site).
 
 ## 2. File structure
 
 | File | Purpose |
 |---|---|
-| `index.html` | Desktop page: driver bar, pursuit test, reaction test, byte-size checkers. |
-| `mobile.html` | Phone-optimized version, same structure, touch-tuned. Sets `window.BLINKCHECK_MOBILE = true` before loading `app.js` to trigger phone-only sensor recalibration. Shares every element `id` with `index.html`. |
-| `app.js` | All application logic — both tests, driver profiles, notifications, audio. One ES module, ~1450 lines, no bundler. |
-| `style.css` | Shared styling: colors, stimulus/target shapes, verdict states, buttons. |
-| `mobile.css` | Phone-only overrides layered on top (bigger touch targets, safe-area insets). |
-| `dashboard.html` / `dashboard.js` | Unlisted admin page — not linked from the main site. |
-| `README.md` | Deployment instructions + original measurement-model writeup. **Stale** — predates driver profiles, the reaction test, the dashboard, and the phone page. Needs an update pass. |
+| `index.html` | Desktop page: driver bar, pursuit test, reaction test, trip controls, readiness/fatigue popups. |
+| `mobile.html` | Phone-optimized version. Sets `window.BLINKCHECK_MOBILE = true` before `app.js`. Shares every element `id` with `index.html`. |
+| `app.js` | All application logic — both tests, driver profiles, trips, ratings, fitness status, reminders, notifications. One ES module, ~1650 lines. |
+| `style.css` / `mobile.css` | Shared / phone-only styling. |
+| `dashboard.html` / `dashboard.js` | Unlisted admin page: passphrase `"admin"` (cosmetic only, see §1). Drivers list, ratings, messaging, admin notifications, thresholds, demo fleet, export/import. |
+| `README.md` | Rewritten this session to match current app state (was badly stale — described a pre-driver-profiles, pre-reaction-test app). |
 | `HANDOFF.md` | This file. |
 
-## 3. Test 1 — Smooth-pursuit eye tracking
+## 3. Test 1 — Smooth-pursuit eye tracking (unchanged this session)
 
-- Stimulus: `a(t) = sin(ωt)`, `ω = 2π × 0.25 Hz`. MediaPipe FaceLandmarker (CDN, WASM+GPU)
-  gives iris landmarks. Calibration (first `CALIBRATION_S`=3s, demo mode 2s): least-squares
-  fit of gain `k`/offset `g0`, accepts **either sign** of `k` (magnitude check only — a
-  fixed camera-mirror-sign assumption isn't safe across devices/browsers, this was a real
-  bug that got fixed). Scoring (next `TEST_S`=12s, demo mode 4s): RMSE of velocity error,
-  **lag-compensated** — the score is computed after aligning eye/target velocity to the
-  best-fit cross-correlation lag (search capped at `MAX_LAG_MS`=250ms desktop / 600ms
-  mobile), because scoring against zero-latency stimulus velocity previously counted normal
-  ~100-200ms human reaction time as tracking error, making the test nearly unpassable.
-- **Anti-cheat gates**, in order: (1) void if calibration failed or <70% valid samples
-  (`MIN_VALID_FRAC`); (2) correlation gate `MIN_CORR`=0.5 desktop/0.4 mobile — Pearson
-  correlation between eye position and lag-shifted target position must clear this or it's
-  an automatic Fail, catching erratic/non-tracking movement that would otherwise show
-  deceptively low RMSE after smoothing; (3) head-movement rejection — a fast-moving
-  EMA-smoothed head-centre point (`HEAD_MOVE_LIMIT`=0.5 interocular-widths/sec) marks
-  frames invalid the same way a blink does, because head yaw isn't compensated and an
-  untracked head can forge a pursuit signal.
-- **Baseline scoring**: first valid run becomes the driver's personal baseline RMSE
-  (capped at `BASELINE_RMSE_CAP`=1.25/s regardless of measured value, to bound how much a
-  bad-faith first run can inflate the reference). Later runs scored as a ratio:
-  **Pass < 1.2× (`WARN_MULT`), Borderline 1.2–1.3×, Fail ≥ 1.3× (`FAIL_MULT`)**.
-- **Void verdict is now visually distinct** ("voidwarn" state): pulsing amber card,
-  "DATA INTEGRITY COMPROMISED" messaging, a "Recalibrate & Retry" button — separated from
-  the quiet neutral "void" styling still used for Running/Baseline-recorded messages. Void
-  never increments strikes.
-- **Overlay**: camera-viewfinder-style corner-bracket reticle on each iris (not filled
-  dots — that was the very first thing fixed this session), color `#38E1C9` (teal, the
-  app's "trace" color — was briefly amber, changed back). A real bug was found and fixed
-  here: the overlay `<canvas>` lacked `object-fit: cover` while the `<video>` had it,
-  causing a systematic offset (reticle landing on eyebrows, not eyes) — found by extracting
-  frames from a user-supplied phone screen recording (no ffmpeg available; used a small
-  Swift/AVFoundation script instead).
-- **Anti-cheat pill**: a transient "⚠️ KEEP HEAD STILL" pill + alert tone (throttled to
-  once/1.5s) fires live, wired directly to the real `HEAD_MOVE_LIMIT` detector.
-- CSV export of every raw sample exists (`downloadCsv()`).
+Stimulus `a(t)=sin(ωt)`, ω=2π×0.25Hz. MediaPipe FaceLandmarker iris tracking. 3s calibration
+(gain `k`/offset `g0`, either sign accepted), 12s lag-compensated RMSE scoring (lag search
+≤250ms desktop/600ms mobile). Anti-cheat: void under 70% valid samples, fail under 0.5/0.4
+eye-target correlation, head-movement frames discarded. First valid run becomes the driver's
+baseline (capped 1.25/s); later runs scored **Pass <1.2×, Borderline 1.2–1.3×, Fail ≥1.3×**.
 
-## 4. Test 2 — Reaction time test
+## 4. Test 2 — Reaction time (bug fixed this session, otherwise unchanged)
 
-- 10 targets (`ROUNDS`, 4 in demo mode), random position (`MARGIN_PCT` 12-88% x, 15-85% y),
-  random delay (600-2200ms). Tap within `TARGET_MS`=2000ms or it's a miss (a lapse).
-  Tapping empty space while no target shown is a false start.
-- Scored on **median** RT (changed from mean — RT distributions are right-skewed, one slow
-  lapse shouldn't dominate; misses are tracked separately anyway).
-- Thresholds (fixed, not self-baselined, unlike pursuit): **Pass < 600ms (`WARN_MEDIAN_MS`),
-  Borderline 600-700ms, Fail ≥ 700ms (`FAIL_MEDIAN_MS`)**, plus `MAX_MISSES`=1 and
-  `MAX_FALSE_STARTS`=2 as hard fail conditions regardless of RT.
-- CSV export exists (`downloadReactionCsv()`): per-target latency, spawn coordinates,
-  miss/false-start events with position and timestamp.
-- No audio cues on this test (see §7 — they were added, then removed after breaking things).
+10 targets (4 in `?demo=true` mode), random position/delay, `pointerdown`-based hit
+detection. Median RT scored: **Pass <600ms, Borderline 600–700ms, Fail ≥700ms**, plus
+>1 miss or >2 false starts fails outright.
 
-### 4a. The reaction-test bug hunt — READ THIS BEFORE ASSUMING IT WORKS
+**Bug found and fixed this session**: `mobile.html` was missing the `<button
+id="btnReactionVoidRetry">` element that `index.html` has. `setReactionVerdict()`
+unconditionally calls `.classList.toggle()` on it, so on mobile this threw a `TypeError`
+immediately on Start, killing `startReaction()` before it reached the line that schedules
+the first `spawnTarget()` — the round counter and "Running" label updated, but no target
+ever appeared. This was **not** a touch/pointer issue (the earlier `pointerdown` rewrite
+from before this session was already correct and untouched). Fixed by adding the missing
+button to `mobile.html`. Confirmed working live.
 
-The user repeatedly reported "reaction test not working" (taps not registering) across
-several rounds of fixes. What actually happened, in order:
+## 5. Driver profiles — data model (`localStorage` key `blinkcheck.drivers.v1`)
 
-1. **First real bug**: added Web Audio cues that could throw synchronously in a spot that
-   broke the calling code entirely (a target's armed/timeout state never got set up, or a
-   test never got scored) — fixed by wrapping all audio in try/catch, but this alone didn't
-   resolve the user's report.
-2. **Second real bug, found via a full audit**: the stage's bottom "round + progress" bar
-   was a full-width `<div>` **without `pointer-events-none`**, overlapping the target's
-   spawn zone (y up to 85%). A tap there hit the invisible footer bar instead of the target
-   underneath — registered as neither hit nor false start, just silently swallowed.
-   Verified conclusively using the browser's own `elementFromPoint` (the real hit-testing
-   algorithm), before/after.
-3. **Third fix, on top of the second**: switched hit-detection from `click` to
-   `pointerdown`, and added `touch-action: manipulation` to the whole stage (previously
-   only the target itself had it). Reasoning: a real touch always has slight finger
-   movement between contact and release, which is enough for mobile browsers to delay or
-   cancel the synthesized `click` event during tap-vs-scroll/zoom gesture disambiguation —
-   even when the tap visually landed correctly. `pointerdown` fires immediately on contact,
-   before any of that runs.
-4. **Sound cues removed from the reaction test entirely** (target chime, false-start buzz,
-   its own completion beep) at the user's explicit request, after repeated breakage
-   reports — even though the try/catch fix in step 1 tested clean, the user was told to
-   just remove them rather than keep debugging blind. The pursuit test's completion beep
-   and head-movement alert tone are untouched (different code paths, never implicated).
+Shared-device model (e.g. a depot kiosk), not a cloud account — a profile lives only on the
+device/browser it was created on. Each driver object:
 
-**Current status: fixes 2 and 3 are committed and verified via the browser's real
-hit-testing engine and synthetic `PointerEvent` dispatch, but NOT yet confirmed working by
-the user on a real device.** This is the single most important open thread — if a new
-session picks this up, the first question should be "did the pointerdown rewrite actually
-fix it on a real phone?" If it's still broken, the next things to suspect: (a) the fix
-genuinely didn't reach the device (caching — see §8, this has bitten the user multiple
-times already), or (b) something about their specific browser/OS's pointer event handling
-that hasn't been considered yet.
+```
+{
+  id, name, created,
+  baseline: {rmse, gain, lagMs, recorded} | null,
+  strikes,                                   // +1 per Fail verdict, either test
+  stats: {pursuit: {pass,watch,fail,void}, reaction: {...}},
+  history: [{t, test, verdict, detail}],     // capped 50, oldest dropped
+  pendingChanges: [...],                      // delta log for the "transferable size" demo
+  rating: {sum, count},                       // NEW — dashboard-set 1-5 star average
+  activeTrip: {startedAt} | null,             // NEW
+  trips: [{id, startedAt, endedAt, rating}],  // NEW — capped 50
+  driveStatus: {value: "can_drive"|"not_applicable", updatedAt} | null  // NEW
+}
+```
 
-## 5. Driver profiles
+## 6. NEW this session — Trip flag + dashboard star rating
 
-`localStorage` key `blinkcheck.drivers.v1`. **Shared-device model** (e.g. a depot kiosk),
-not a cloud account system — a profile lives only on the browser/device it was created on,
-full stop, no way around this without a real backend (see §9).
+- **Start trip** button sits below the baseline/pursuit/reaction stats block on the driver
+  card. Clicking it hides itself, shows **End trip**, and locks driver-switching
+  (`updateDriverLock()` now also checks `driver.activeTrip`).
+- **End trip** closes the trip with no self-scoring — it just appends to `driver.trips` with
+  `rating: null`, which is the "flag" the dashboard reacts to.
+- Dashboard: any driver with an unrated trip shows a **"N trip(s) awaiting rating"** badge
+  and a 5-star click-to-rate control per pending trip. Rating updates `driver.rating.sum/count`
+  immediately, visible on both the dashboard and the driver's own page (`el.driverRating`,
+  next to Strikes on the driver card).
+- Functions: `startTrip()`, `endTrip()` in `app.js`; rating UI + `.btnRateTrip` handler in
+  `dashboard.js`'s `renderDrivers()`.
 
-Each profile: `name`, `created`, `baseline` (or null), `strikes`, `stats` (pass/borderline/
-fail/void counts per test), `history` (capped 50-entry log), and `pendingChanges` (see §6 —
-an uncapped delta log cleared on "sync").
+## 7. NEW this session — Fitness status ("Can Drive" / "Not Applicable to Drive")
 
-- **Strike = one per Fail verdict**, either test. Borderline doesn't strike, strikes don't
-  auto-expire.
-- Both tests gate on having an active driver selected (pursuit also needs camera on).
-  Switching drivers is locked while either test runs — this was a real crash risk
-  (`finishTest()` would dereference a null baseline if the active driver changed mid-run).
+Shared logic, `app.js`:
+```js
+function latestVerdict(driver, testType) { /* most recent history entry of that test type, or null */ }
+function computeDriveStatus(driver) {
+  // null if either test never run. Otherwise: "can_drive" ONLY if both latest
+  // verdicts are exactly "pass" (the safest combination, per explicit user instruction —
+  // Borderline/Fail/Void on either test = "not_applicable"). No exceptions.
+}
+```
 
-## 6. Dev dashboard (`dashboard.html`/`dashboard.js`)
+**Where it shows and how it updates (this was corrected mid-session — read carefully):**
+- The **big CAN DRIVE / NOT APPLICABLE TO DRIVE badge lives on the dashboard's driver list**
+  (not the driver-facing page), next to each driver's name. Green pill for CAN DRIVE, red for
+  NOT APPLICABLE TO DRIVE.
+- It is **only recomputed/written when the driver-side periodic reminder actually fires**
+  (`checkNotifyDue()` → `updateDriveStatusLabel()`), not live after every test. This was a
+  deliberate user instruction: it's meant to read as a periodic check-in snapshot, not a
+  constantly-flickering readout.
+- **Whenever the stored value changes**, a dashboard notification event is queued
+  (`pushDashboardEvent("drive_status", driver, {status})`) — "if there is any update to the
+  label then a relevant notification is sent," per the user's exact words.
+- **Start Trip is locked until both checks have been completed** — completed, not
+  necessarily *passed*. This was a deliberate, literal reading of "lock it till the checks
+  have been completed" — a driver who fails both checks can still technically start a trip
+  once both have been *run*. Flagged to the user as a possible mismatch with real-world
+  safety intent; they confirmed "yes correct" but this is worth re-confirming if it ever
+  matters in practice.
 
-Unlisted, gated by a passphrase (`"admin"`, in `dashboard.js`) that is **explicitly not
-real security** — visible in plain source, only stops casual stumbling. Two tabs:
+## 8. NEW this session — Readiness popup ("Ready to Drive")
 
-- **Settings**: reminder interval + test-send; **live-editable score thresholds**
-  (`blinkcheck.thresholds.v1`, read once by `app.js` at load — takes effect next page load,
-  not live mid-session); aggregate overview (driver count, tests recorded, total strikes).
-- **Drivers**: a plain list of driver names, each a `<details>` dropdown with baseline,
-  stats, strikes, full history, and Reset-strikes/Delete actions.
+The moment `recordResult()` sees **both** pursuit and reaction have a latest verdict (after
+recording whichever test just finished), it shows a popup (`showReadinessPopup()`):
+- Both latest verdicts `"pass"` → ✅ "Ready to Drive."
+- Anything else → 🚫 "Not Applicable to Drive," names which test(s) need a redo, and a
+  "Repeat the test" button that scrolls to the relevant section (`el.stage` or `el.rStage`).
+- **Explicitly re-triggers on every subsequent test completion**, not just the first time —
+  confirmed by the user ("yes it can re-trigger").
+- **No baseline concept was added to the reaction test** — explicitly declined by the user.
+  "Both checks completed" means "both have a recorded verdict at least once," not "both have
+  a self-baseline" (only pursuit has ever had that concept).
+- Purely advisory — the app cannot force anyone to retest or stop driving.
+- Also pushes a `pushDashboardEvent("completed_both", driver, {pursuitVerdict, reactionVerdict})`
+  every time this fires, which is what drives the admin "driver completed both checks"
+  notification (see §9) — **this only fires once both are done, never after a single
+  individual test**, per explicit user correction.
 
-Also: **"Load demo fleet"** button seeds 3 fabricated profiles spanning the verdict range
-(Raju Kumar/pass/0 strikes, Vikram Singh/borderline/2 strikes, Amit Sharma/3 strikes) —
-additive, not destructive, for stage demos. **Export/Import JSON** — export downloads
-drivers+notify+thresholds as one file; import merges a backup file back in and refreshes
-the UI live. **Live cross-tab sync** — a `storage` event listener means a driver created in
-another tab of the *same browser, same origin* appears without a manual reload (does NOT
-and cannot reach a different browser or device — see §8).
+## 9. NEW this session — Reminders redesigned + admin messaging
 
-## 7. Notifications & audio
+**The old reminder system was a bare timer that assumed compliance.** Rebuilt this session
+per explicit instruction: *"don't put the recheck on a timer, the driver needs to find a
+space to stop as well."*
 
-**Notifications**: foreground-only (Notification API, no backend = no true background
-push). iOS Safari — and every iOS browser, since Apple mandates WebKit — doesn't support
-this outside an installed home-screen app. Android Chrome supports it in a regular tab.
+- `blinkcheck.notify.v1` now holds `{enabled, intervalHours, lastNotified, snoozeCount,
+  nextCheckAt}`.
+- `checkNotifyDue()` (still polled every 60s) no longer fires a bare notification — it calls
+  `promptFatigueCheck(messageText)`, which shows an **on-screen modal** (`#fatigueModal`)
+  with two choices, plus a best-effort native `Notification` alongside it:
+  - **Snooze 15 minutes** — allowed **at most twice** per cycle (`NOTIFY_MAX_SNOOZES = 2`).
+    On the 3rd due-check the snooze button is hidden entirely, forcing "Do the checks now"
+    as the only option (still advisory, not enforced).
+  - **Do the checks now** — closes the popup, scrolls to the pursuit stage, and (a judgment
+    call, not explicitly requested — flag if unwanted) sets a **5-minute grace window**
+    (`DO_NOW_GRACE_MS`) before the reminder could fire again, so it doesn't immediately
+    re-nag if they get pulled away.
+  - The **real reset** of the whole cycle (`snoozeCount → 0`, `nextCheckAt → +intervalHours`)
+    happens only when `recordResult()` sees both checks completed — i.e. actual completion
+    resolves the reminder, not a timer assuming it did.
+- **Admin-to-driver messaging (new)**: dashboard has a per-driver text box + Send button
+  (`sendAdminMessage(driverId, text)` in `dashboard.js`) that writes to
+  `blinkcheck.adminMessage.v1` = `{id, t, driverId, text}`. `app.js` has a new `"storage"`
+  event listener that, if the message's `driverId` matches the currently active driver on
+  that device, calls the exact same `promptFatigueCheck(msg.text)` — same on-screen popup,
+  same snooze budget, same native notification. Per explicit instruction: *"For any message
+  sent by the admin, it pops up on the screen as well as a notification being sent."*
+- **Admin notifications (dashboard side, new)**: a "Enable admin notifications" toggle in
+  the dashboard's Settings tab (same opt-in pattern as the driver's own reminder button).
+  Watches `blinkcheck.dashboardEvents.v1` (a capped, append-only event log app.js writes to
+  — types `"completed_both"` and `"drive_status"`) via the dashboard's existing `storage`
+  listener, and fires a native `Notification` per unseen event
+  (`processDashboardEvents()`/`loadAdminNotify()`/`ADMIN_NOTIFY_KEY`).
 
-**Audio cues** (native `AudioContext`, zero dependencies): pursuit test only now — a
-completion beep and a head-movement alert tone (throttled 1/1.5s). Everything in the audio
-module is wrapped in try/catch and can never throw outward, after the bug in §4a step 1.
-Reaction test has no sound (removed).
+**All of this is still foreground-only, same-device-only** — the exact same limitation as
+every other notification feature in this app. Nothing here reaches a different physical
+device.
 
-## 8. Known limitations — the load-bearing ones
+## 10. Testing status — what's actually been verified vs. not
 
-1. **Every threshold is a provisional guess**, hand-tuned through this session's manual
-   testing, not real rested/fatigued population data. CSV exports exist for both tests as
-   the intended path to eventually fix this.
-2. **`localStorage` never crosses devices, browsers, or origins** — hit repeatedly this
-   session in different forms: two browsers on the same device (Safari vs Arc) have fully
-   separate storage; an iOS home-screen-installed app has separate storage from the same
-   site in a regular tab; `http://localhost:8000` and `https://<lan-ip>:8443` are different
-   origins; two physical devices visiting the identical URL never share storage, ever, no
-   client-side trick around it.
-3. **Caching has repeatedly masked whether a fix actually landed** — several "still not
-   working" reports turned out to be stale cached JS/CSS rather than the code being wrong.
-   Always suspect this first: hard refresh (Cmd+Shift+R), or fully close/reopen the tab.
-4. Head yaw isn't compensated (only fast head *movement* is caught, not a held turn).
-5. Dashboard passphrase is cosmetic only.
-6. Baseline gaming is bounded (the RMSE cap) but not eliminated.
-7. No automated test suite — all verification this session was manual/live browser testing.
+Verified live, against real `localStorage` state (not just UI), in the session's automated
+browser (Notification permission is **"denied"** in that sandbox and cannot be granted
+programmatically):
+- mobile.html reaction-test fix (target now spawns correctly).
+- Rating/trip flow end to end (start → end → dashboard flags it → star-rate it → average
+  updates everywhere).
+- Readiness popup firing correctly for a real Pass+Fail combination, with correct message
+  and working "Repeat the test" scroll-to behavior.
+- Start Trip lock/unlock tied correctly to checks-completed state.
+- Dashboard CAN DRIVE / NOT APPLICABLE badges rendering correctly (via demo fleet data).
+- Fatigue check-in popup: admin message delivery, snooze counting to exactly 2 then hiding
+  the snooze option, "Do the checks now" behavior, all via direct state inspection.
+- Message composer writes the correct payload to `blinkcheck.adminMessage.v1`.
 
-## 9. Explicitly scoped but NOT built
+**NOT verified — because it requires real Notification permission that the sandbox can't
+grant**: the actual native OS/browser notification popup firing for (a) the driver's fatigue
+reminder, (b) an admin-sent message, (c) the dashboard's admin-notification toggle. The code
+path is straightforward and mirrors the pre-existing, already-working driver reminder
+button, but **this needs a real check on an actual device/browser with permission granted**.
 
-- **Real backend for cross-device sync** — fully roadmapped (data model, API surface, real
-  auth, hosting options; Supabase recommended over a custom server) with a time estimate
-  (~1 day for a working sync MVP, +0.5-1 day for real push notifications, open-ended for
-  hardening). User said to leave it for now.
-- **"Declared unfit to drive" off a wide-deviation baseline** — discussed at length (baseline
-  noise usually means bad lighting/setup, not fitness), a clarifying question was asked and
-  dismissed without an answer. **Not built, no decision made** — don't assume behavior here.
-- **A literal 2D "wave" pursuit path** — discussed (vertical gaze isn't measured at all,
-  inherently noisier to extract than horizontal), user was told to leave it alone.
-- **A fabricated "syncing to broker... 48 bytes" toast** — explicitly refused to build, since
-  it would fabricate a network event that doesn't exist, contradicting the app's real
-  architecture to an audience evaluating whether the "video never leaves this device" claim
-  is true. Built an honest version instead (see next point).
+## 11. Known limitations (carried over, still true)
 
-## 10. The "real payload size" features (honest alternative to fake sync)
-
-Two byte-size checkers, both on the main pages (not the dashboard):
-- **"Check payload size"**: real byte size (`Blob` size of `JSON.stringify`) of the active
-  driver's full profile record.
-- **"Check transferable size (since last sync)"**: tracks a `pendingChanges` delta log per
-  driver (appended to by `saveDriverBaseline()`/`recordResult()`/`clearDriverBaseline()` as
-  they happen), reports its real byte size, then **clears it** — simulating the lifecycle a
-  real incremental-sync client would use (drop a change once delivery is confirmed), clearly
-  framed as a simulation since there's no real backend to confirm anything.
-
-## 11. Local dev tooling (not part of the shipped app)
-
-- `python3 -m http.server 8000` — plain local testing.
-- A self-signed HTTPS server (Python + `openssl`-generated cert, SAN covering `localhost`,
-  `127.0.0.1`, and the current LAN IP) on port 8443, needed because `getUserMedia` requires
-  HTTPS or `localhost`, and a phone can't reach `localhost` on a different machine. The LAN
-  IP changes with network changes — college Wi-Fi had client isolation that blocked
-  phone-to-laptop entirely (not fixable from software, had to switch to a personal hotspot).
-  Both servers currently running; restart pattern used throughout: `kill $(lsof -ti :8443)`
-  then relaunch the script at
-  `/private/tmp/claude-501/.../scratchpad/https/serve_https.py <project-dir> 8443`.
+1. Every threshold is a provisional guess, not from real rested/fatigued data. Both tests
+   export CSVs as the intended fix path.
+2. `localStorage` never crosses devices/browsers/origins — this is why the dashboard on a
+   laptop can't see a driver profile created on a phone, why admin messages/notifications
+   only reach the same physical device, and why the whole trip/rating/fitness-status system
+   is built around a single shared-kiosk device rather than a phone+laptop pair. The
+   Export/Import JSON flow in the dashboard is the only bridge between devices.
+3. Head yaw isn't compensated (pursuit test).
+4. Baseline gaming is bounded (RMSE cap) but not eliminated.
+5. Dashboard passphrase is cosmetic only, and now sits in a **public** repo.
+6. No automated test suite — everything verified via manual/live browser testing.
 
 ## 12. Immediate next steps, in priority order
 
-1. **Confirm whether the pointerdown rewrite (§4a) actually fixed the reaction test on a
-   real device.** This is the one open thread that matters most.
-2. If confirmed fixed: the user's original stated plan was test-locally-then-push-to-GitHub
-   — that's the natural next milestone, and it also resolves most of the HTTPS/caching/
-   cross-origin pain from local testing.
-3. If still broken: get the exact symptom again (does the round counter advance at all on
-   tap? which browser/OS exactly?) rather than guessing at a fourth fix blind.
-4. Longer-term, not urgent: real threshold calibration from actual data (CSV exports already
-   support this), README update (currently describes a much simpler pre-driver-profiles
-   app), and the real-backend path if cross-device sync becomes a hard requirement.
+1. **Real-device verification of the notification stack** — the one thing this session
+   could not test (see §10). On an actual phone/laptop with Notification permission granted:
+   confirm the driver's fatigue popup fires a real native notification, confirm an
+   admin-sent message reaches the driver's tab, confirm the dashboard's own admin
+   notifications fire for `completed_both`/`drive_status` events.
+2. **Decide on `dashboard.html`'s public exposure** — flagged, unresolved. The passphrase is
+   plaintext in a now-public repo's source. Options: leave as-is (matches the app's own
+   stated "not real security" framing), change the passphrase to something less guessable
+   (still cosmetic), or exclude it from the deployed Pages site entirely.
+3. **Sanity-check the "Start Trip locks on completion, not on passing" behavior** (§7) in
+   practice — the user confirmed the literal reading but it's worth a second look once
+   there's real usage.
+4. **Sanity-check the 5-minute "Do the checks now" grace period** (§9) — an unrequested
+   addition made to avoid an annoying re-nag loop; adjust or remove if unwanted.
+5. Longer-term, not urgent: real threshold calibration from CSV exports, a real backend if
+   cross-device sync ever becomes a hard requirement (explicitly deferred, not because it's
+   hard — ~1 day estimate previously given — but because of time).
