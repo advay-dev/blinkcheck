@@ -62,6 +62,15 @@
   <!-- ============ DASHBOARD (hidden until unlocked) ============ -->
   <div id="dashBody" class="hidden flex flex-col gap-5">
 
+    <!-- ============ TAB NAV ============ -->
+    <div class="flex gap-2 border-b border-rail">
+      <button id="tabBtnSettings" class="px-4 py-2 text-sm font-cond" style="font-weight:600">Settings</button>
+      <button id="tabBtnDrivers" class="px-4 py-2 text-sm font-cond" style="font-weight:600">Drivers</button>
+    </div>
+
+    <!-- ============ SETTINGS TAB ============ -->
+    <div id="tabSettings" class="flex flex-col gap-5">
+
     <div class="rounded-xl border border-rail bg-panel p-5">
       <h2 class="font-cond text-xl" style="font-weight:600">Reminder notifications</h2>
       <p class="text-xs text-muted mt-1">
@@ -132,32 +141,20 @@
       </dl>
     </div>
 
-    <div class="rounded-xl border border-rail bg-panel">
-      <div class="border-b border-rail px-5 py-3 flex items-center justify-between gap-3">
-        <h2 class="font-cond text-xl" style="font-weight:600">Driver repository</h2>
-        <div class="flex items-center gap-3">
-          <span class="text-xs text-muted">This device only</span>
-          <button id="btnExport" class="text-xs text-muted underline decoration-dotted hover:text-ink">Export JSON</button>
-        </div>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="text-left text-xs text-muted border-b border-rail">
-              <th class="px-5 py-2 font-normal">Name</th>
-              <th class="px-3 py-2 font-normal">Baseline</th>
-              <th class="px-3 py-2 font-normal">Strikes</th>
-              <th class="px-3 py-2 font-normal">Pursuit P/B/F/V</th>
-              <th class="px-3 py-2 font-normal">Reaction P/B/F/V</th>
-              <th class="px-3 py-2 font-normal">Created</th>
-              <th class="px-5 py-2 font-normal"></th>
-            </tr>
-          </thead>
-          <tbody id="driverRows" class="divide-y divide-rail"></tbody>
-        </table>
-        <p id="driverEmpty" class="px-5 py-6 text-sm text-muted hidden">No driver profiles on this device yet.</p>
-      </div>
     </div>
+    <!-- ============ /SETTINGS TAB ============ -->
+
+    <!-- ============ DRIVERS TAB ============ -->
+    <div id="tabDrivers" class="hidden flex flex-col gap-3">
+      <div class="flex items-center justify-between gap-3">
+        <span class="text-xs text-muted">All driver profiles on this device</span>
+        <button id="btnExport" class="text-xs text-muted underline decoration-dotted hover:text-ink">Export JSON</button>
+      </div>
+
+      <div id="driverList" class="flex flex-col gap-3"></div>
+      <p id="driverEmpty" class="px-1 py-6 text-sm text-muted hidden">No driver profiles on this device yet.</p>
+    </div>
+    <!-- ============ /DRIVERS TAB ============ -->
 
   </div>
 </main>

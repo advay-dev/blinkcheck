@@ -30,8 +30,26 @@ const el = {
   btnSaveThresholds: $("btnSaveThresholds"), btnResetThresholds: $("btnResetThresholds"),
   statDrivers: $("statDrivers"), statTests: $("statTests"), statStrikes: $("statStrikes"),
   btnExport: $("btnExport"),
-  driverRows: $("driverRows"), driverEmpty: $("driverEmpty")
+  driverList: $("driverList"), driverEmpty: $("driverEmpty"),
+  tabBtnSettings: $("tabBtnSettings"), tabBtnDrivers: $("tabBtnDrivers"),
+  tabSettings: $("tabSettings"), tabDrivers: $("tabDrivers")
 };
+
+/* ------------------------------------------------------------------- tabs -- */
+
+function setTab(tab) {
+  const onDrivers = tab === "drivers";
+  el.tabDrivers.classList.toggle("hidden", !onDrivers);
+  el.tabSettings.classList.toggle("hidden", onDrivers);
+  el.tabBtnDrivers.style.color = onDrivers ? "var(--ink)" : "var(--muted)";
+  el.tabBtnDrivers.style.borderBottom = onDrivers ? "2px solid var(--amber)" : "2px solid transparent";
+  el.tabBtnSettings.style.color = onDrivers ? "var(--muted)" : "var(--ink)";
+  el.tabBtnSettings.style.borderBottom = onDrivers ? "2px solid transparent" : "2px solid var(--amber)";
+}
+
+el.tabBtnSettings.addEventListener("click", () => setTab("settings"));
+el.tabBtnDrivers.addEventListener("click", () => setTab("drivers"));
+setTab("settings");
 
 /* ------------------------------------------------------------------ gate -- */
 
@@ -161,45 +179,48 @@ function renderDrivers() {
   const drivers = Object.values(store.drivers);
 
   let totalTests = 0, totalStrikes = 0;
-  el.driverRows.innerHTML = "";
+  el.driverList.innerHTML = "";
   for (const d of drivers) {
     const p = d.stats.pursuit, r = d.stats.reaction;
     totalTests += p.pass + p.watch + p.fail + p.void + r.pass + r.watch + r.fail + r.void;
     totalStrikes += d.strikes;
 
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td class="px-5 py-2">${escapeHtml(d.name)}</td>
-      <td class="px-3 py-2 readout">${d.baseline ? d.baseline.rmse.toFixed(3) : "not set"}</td>
-      <td class="px-3 py-2 readout" style="color: var(--signal);">${d.strikes}</td>
-      <td class="px-3 py-2 readout">${p.pass} / ${p.watch} / ${p.fail} / ${p.void}</td>
-      <td class="px-3 py-2 readout">${r.pass} / ${r.watch} / ${r.fail} / ${r.void}</td>
-      <td class="px-3 py-2 text-muted text-xs">${new Date(d.created).toLocaleDateString()}</td>
-      <td class="px-5 py-2 text-right whitespace-nowrap">
-        <button data-id="${d.id}" class="btnHistory text-xs text-muted underline decoration-dotted hover:text-ink">History</button>
-        <button data-id="${d.id}" class="btnResetStrikes text-xs text-muted underline decoration-dotted hover:text-ink ml-3">Reset strikes</button>
-        <button data-id="${d.id}" class="btnDeleteDriver text-xs text-muted underline decoration-dotted hover:text-ink ml-3">Delete</button>
-      </td>
-    `;
-    el.driverRows.appendChild(tr);
-
-    const histRow = document.createElement("tr");
-    histRow.id = `hist-${d.id}`;
-    histRow.className = "hidden";
     const entries = d.history.slice().reverse();
-    histRow.innerHTML = `
-      <td colspan="7" class="px-5 py-3 bg-hull">
+    const details = document.createElement("details");
+    details.className = "rounded-xl border border-rail bg-panel";
+    details.innerHTML = `
+      <summary class="px-5 py-3 flex items-center justify-between gap-3 cursor-pointer select-none">
+        <span class="font-cond text-lg" style="font-weight:600">${escapeHtml(d.name)}</span>
+        <span class="flex items-center gap-4 text-xs text-muted">
+          <span>${new Date(d.created).toLocaleDateString()}</span>
+          <span style="color: var(--signal);">${d.strikes} strike${d.strikes === 1 ? "" : "s"}</span>
+        </span>
+      </summary>
+      <div class="border-t border-rail p-5">
+        <dl class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+          <div><dt class="text-xs text-muted">Baseline RMSE</dt><dd class="readout mt-1">${d.baseline ? d.baseline.rmse.toFixed(3) : "not set"}</dd></div>
+          <div><dt class="text-xs text-muted">Pursuit P/B/F/V</dt><dd class="readout mt-1">${p.pass} / ${p.watch} / ${p.fail} / ${p.void}</dd></div>
+          <div><dt class="text-xs text-muted">Reaction P/B/F/V</dt><dd class="readout mt-1">${r.pass} / ${r.watch} / ${r.fail} / ${r.void}</dd></div>
+          <div><dt class="text-xs text-muted">Strikes</dt><dd class="readout mt-1" style="color: var(--signal);">${d.strikes}</dd></div>
+        </dl>
+
+        <p class="text-xs text-muted mt-5 mb-2">Result history</p>
         ${entries.length
-          ? `<ul class="text-xs text-muted space-y-1">${entries.map((h) => `
+          ? `<ul class="text-xs text-muted space-y-1 max-h-48 overflow-y-auto">${entries.map((h) => `
               <li>
                 <span class="readout" style="color: var(--ink);">${new Date(h.t).toLocaleString()}</span>
                 — ${escapeHtml(h.test)} —
                 <span style="color: ${h.verdict === "fail" ? "var(--signal)" : h.verdict === "watch" ? "var(--amber)" : h.verdict === "pass" ? "var(--trace)" : "var(--muted)"};">${escapeHtml(h.verdict)}</span>
               </li>`).join("")}</ul>`
           : `<p class="text-xs text-muted">No history recorded yet.</p>`}
-      </td>
+
+        <div class="mt-5 pt-4 border-t border-rail flex items-center gap-4">
+          <button data-id="${d.id}" class="btnResetStrikes text-xs text-muted underline decoration-dotted hover:text-ink">Reset strikes</button>
+          <button data-id="${d.id}" class="btnDeleteDriver text-xs text-muted underline decoration-dotted hover:text-ink">Delete driver</button>
+        </div>
+      </div>
     `;
-    el.driverRows.appendChild(histRow);
+    el.driverList.appendChild(details);
   }
 
   el.driverEmpty.classList.toggle("hidden", drivers.length > 0);
@@ -207,14 +228,9 @@ function renderDrivers() {
   el.statTests.textContent = String(totalTests);
   el.statStrikes.textContent = String(totalStrikes);
 
-  el.driverRows.querySelectorAll(".btnHistory").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.getElementById(`hist-${btn.getAttribute("data-id")}`).classList.toggle("hidden");
-    });
-  });
-
-  el.driverRows.querySelectorAll(".btnResetStrikes").forEach((btn) => {
-    btn.addEventListener("click", () => {
+  el.driverList.querySelectorAll(".btnResetStrikes").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
       const id = btn.getAttribute("data-id");
       const store2 = loadDrivers();
       const driver = store2.drivers[id];
@@ -225,8 +241,9 @@ function renderDrivers() {
     });
   });
 
-  el.driverRows.querySelectorAll(".btnDeleteDriver").forEach((btn) => {
-    btn.addEventListener("click", () => {
+  el.driverList.querySelectorAll(".btnDeleteDriver").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
       const id = btn.getAttribute("data-id");
       const store2 = loadDrivers();
       if (!confirm(`Delete driver "${store2.drivers[id]?.name}"? This removes their baseline, strikes and history.`)) return;
